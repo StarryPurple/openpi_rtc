@@ -156,9 +156,10 @@ robot_pc_check_*.txt
 /python311/
 /requirements-offline.txt
 
-# Large deliverables / OBS-only artifacts (不经过 git，走 OBS)
-/deliverable/
-/train_deliverable/
+# Large OBS-only artifacts (不经过 git，走 OBS)；代码目录保留进 git
+/deliverable/yulong.tar.gz
+/train_deliverable/checkpoints/
+/train_deliverable/datasets/
 /deliverable.tar.gz
 /rtc_bench.tar.gz
 /finetune_data.tar.gz
