@@ -6,6 +6,28 @@ loop, a numpy action queue, offline HDF5 evaluation, checkpoint probing, a
 real-robot adapter, and the train-RTC / πR² training entries. See README.md.
 """
 
+import pathlib
+import sys
+
+# This package is also the repository root: the vendored `openpi` /
+# `openpi_client` packages live next to it. Make both importable regardless
+# of whether they were installed by `uv sync` (the workspace installs
+# openpi-client from packages/openpi-client/src) or just on PYTHONPATH.
+_REPO_ROOT = pathlib.Path(__file__).resolve().parent
+_OPENPI_CLIENT_SRC = _REPO_ROOT / "packages" / "openpi-client" / "src"
+for _p in (str(_REPO_ROOT), str(_OPENPI_CLIENT_SRC)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+# When this package is extracted as <xtrainer>/rtc_control, the platform's
+# dobot_control lives in the parent (<xtrainer> root). Append the parent
+# *after* the repo root so `import dobot_control` resolves without a
+# PYTHONPATH tweak, while this repo's own modules (e.g. scripts/) keep
+# priority.
+_PARENT_ROOT = _REPO_ROOT.parent
+if str(_PARENT_ROOT) not in sys.path:
+    sys.path.append(str(_PARENT_ROOT))
+
 from .action_queue import ActionQueue
 from .integrate_openpi import (
     RtcPolicy,

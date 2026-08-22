@@ -7,12 +7,12 @@ train-RTC / inference-RTC delay ``d`` for a given control frequency.
 
 Usage (repo root):
   # model-only + HDF5 decode path (any machine with the checkpoint):
-  uv run python openpi_rtc/measure_latency.py \
+  uv run python measure_latency.py \
       --checkpoint <49999 dir> \
       --hdf5 ${OPENPI05_RAW_TRAIN_DIR:-<hdf5_dir>}
 
   # real robot path: supply a live observation source and run without --hdf5
-  uv run python openpi_rtc/measure_latency.py --checkpoint <dir>
+  uv run python measure_latency.py --checkpoint <dir>
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ import statistics
 import sys
 import time
 
-_REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+_REPO_ROOT = pathlib.Path(__file__).resolve().parent
 for _p in (str(_REPO_ROOT), str(_REPO_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
@@ -41,7 +41,7 @@ DEFAULT_PROMPT = "Transfer the test tube from the right rack to the left rack."
 
 def parse_args():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--config", default="pi05-task_00031_yulong-xtrainer")
+    ap.add_argument("--config", default="pi05-task_00031_entong-xtrainer")
     ap.add_argument("--checkpoint", required=True)
     ap.add_argument("--prompt", default=DEFAULT_PROMPT)
     ap.add_argument("--hdf5", default=None,

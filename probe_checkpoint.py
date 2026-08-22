@@ -3,7 +3,7 @@
 
 Run it on the GPU machine inside the openpi fork repo root:
 
-  uv run python openpi_rtc/probe_checkpoint.py \
+  uv run python probe_checkpoint.py \
       --checkpoint /abs/path/to/49999 \
       --dataset /abs/path/to/hdf5_dir \
       --prompt "Transfer the test tube from the right rack to the left rack."
@@ -24,7 +24,7 @@ import sys
 import time
 from pathlib import Path
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
+_REPO_ROOT = Path(__file__).resolve().parent
 for _p in (_REPO_ROOT, str(_REPO_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
@@ -32,7 +32,7 @@ for _p in (_REPO_ROOT, str(_REPO_ROOT)):
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--config", default="pi05-task_00031_yulong-xtrainer")
+    ap.add_argument("--config", default="pi05-task_00031_entong-xtrainer")
     ap.add_argument("--checkpoint", required=True)
     ap.add_argument("--dataset", default=None)
     ap.add_argument("--prompt", default=None)

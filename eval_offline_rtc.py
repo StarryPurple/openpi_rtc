@@ -14,10 +14,10 @@ protocol), feeding the previous raw chunk (re-anchored to the current
 observation state) as ``prev_chunk_left_over``.
 
 Usage:
-  uv run python openpi_rtc/eval_offline_rtc.py --mode baseline \
+  uv run python eval_offline_rtc.py --mode baseline \
       --checkpoint <49999 dir> --dataset <hdf5_dir> \
       --prompt "Transfer the test tube from the right rack to the left rack."
-  uv run python openpi_rtc/eval_offline_rtc.py --mode rtc --inference_delay 4 ...
+  uv run python eval_offline_rtc.py --mode rtc --inference_delay 4 ...
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ import h5py
 import numpy as np
 import tqdm
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
+_REPO_ROOT = Path(__file__).resolve().parent
 for _p in (_REPO_ROOT, str(_REPO_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
@@ -49,7 +49,7 @@ DEFAULT_PROMPT = "Transfer the test tube from the right rack to the left rack."
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=str, default="pi05-task_00031_yulong-xtrainer")
+    parser.add_argument("--config", type=str, default="pi05-task_00031_entong-xtrainer")
     parser.add_argument("--checkpoint", type=str, required=True)
     parser.add_argument("--dataset", type=str, required=True)
     parser.add_argument("--prompt", type=str, default=DEFAULT_PROMPT)

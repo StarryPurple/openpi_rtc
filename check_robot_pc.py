@@ -4,7 +4,7 @@
 Runs every check from CHECKLIST.md Phase 1 and writes a report you can send
 back as-is. Read-only except for connecting to cameras/robots:
 
-    python3 openpi_rtc/check_robot_pc.py [--control-repo <dobot控制仓库根>] [--with-robot]
+    python3 check_robot_pc.py [--control-repo <dobot控制仓库根>] [--with-robot]
 
 Exit code 0 = all critical checks passed; 1 = something to fix.
 """
@@ -17,7 +17,7 @@ import pathlib
 import subprocess
 import sys
 
-_REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+_REPO_ROOT = pathlib.Path(__file__).resolve().parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
@@ -123,7 +123,11 @@ def main() -> int:
 
         rep.ok("import dobot_control", "OK")
     except Exception as e:  # noqa: BLE001
-        rep.fail("import dobot_control", repr(e)[:120])
+        rep.warn(
+            "import dobot_control",
+            "未安装（非必需：bench 用 openpi-main examples/xtrainer_real；"
+            "旧流程需 --control-repo 指定手操仓库）",
+        )
 
     try:
         import jax
@@ -149,25 +153,41 @@ def main() -> int:
     print("\n--- C. 低风险冒烟 ---")
     try:
         from dobot_control.cameras.realsense_camera import get_device_ids
-
+    except Exception:  # noqa: BLE001
+        try:
+            from examples.xtrainer_real.cameras.realsense_camera import get_device_ids
+        except Exception:  # noqa: BLE001
+            get_device_ids = None
+    try:
+        assert get_device_ids is not None
         ids = get_device_ids()
         rep.ok("相机枚举", str(ids))
         expected = {"218622271430", "218622270365", "218622276272"}
         if not expected.issubset(set(ids)):
             rep.warn("相机 serial", f"与 ini 配置不完全一致: {ids}")
+    except AssertionError:
+        rep.warn("相机枚举", "未找到 dobot_control / examples.xtrainer_real 相机实现")
     except Exception as e:  # noqa: BLE001
         rep.fail("相机枚举", repr(e)[:120])
 
     if args.with_robot:
-        for ip, side in (("192.168.5.1", "左臂"), ("192.168.5.2", "右臂")):
+        try:
+            from dobot_control.robots.dobot import DobotRobot
+        except Exception:  # noqa: BLE001
             try:
-                from dobot_control.robots.dobot import DobotRobot
-
-                r = DobotRobot(robot_ip=ip)
-                joints = r.get_joint_state()
-                rep.ok(f"读取 {side} 关节", f"shape={joints.shape}, 前3={joints[:3]}")
-            except Exception as e:  # noqa: BLE001
-                rep.fail(f"读取 {side} 关节", repr(e)[:120])
+                from examples.xtrainer_real.robots.dobot import DobotRobot
+            except Exception:  # noqa: BLE001
+                DobotRobot = None
+        if DobotRobot is None:
+            rep.warn("机械臂冒烟", "未找到 dobot_control / examples.xtrainer_real 机器人实现，跳过")
+        else:
+            for ip, side in (("192.168.5.1", "左臂"), ("192.168.5.2", "右臂")):
+                try:
+                    r = DobotRobot(robot_ip=ip)
+                    joints = r.get_joint_state()
+                    rep.ok(f"读取 {side} 关节", f"shape={joints.shape}, 前3={joints[:3]}")
+                except Exception as e:  # noqa: BLE001
+                    rep.fail(f"读取 {side} 关节", repr(e)[:120])
     else:
         print("(未加 --with-robot，跳过机械臂只读冒烟；确认上电后重跑)")
 

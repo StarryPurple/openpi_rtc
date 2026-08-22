@@ -142,3 +142,26 @@ cython_debug/
 *.swo
 *~
 .DS_Store
+
+# Runtime artifacts (created by training / eval / robot flows)
+/assets/
+/checkpoints/
+/eval_logs/
+/wandb/
+probe_report_*.txt
+robot_pc_check_*.txt
+
+# Offline environment artifacts (built by prepare_offline_env.sh)
+/wheels/
+/python311/
+/requirements-offline.txt
+
+# Large deliverables / OBS-only artifacts (不经过 git，走 OBS)
+/deliverable/
+/train_deliverable/
+/deliverable.tar.gz
+/rtc_bench.tar.gz
+/finetune_data.tar.gz
+/yulong.tar.gz
+
+/bos_upload.py

@@ -20,11 +20,11 @@ in-flight actions (re-anchored to the current observation state) and their
 time is fixed at 0 (clean), so only the tail is denoised.
 
 The implementation monkey-patches ``Pi0.compute_loss`` / ``Pi0.sample_actions``
-in-process, so the parent repository stays untouched. Run the training entry
-on the GPU machine with the same uv environment as the parent pipeline.
+in-process, so the vendored openpi code stays untouched. The repository is
+standalone (``uv sync`` at the repo root sets up the environment).
 
 Usage (GPU machine, repo root):
-    uv run python openpi_rtc/rtc_train.py --exp-name rtc_train_d6 \
+    uv run python rtc_train.py --exp-name rtc_train_d6 \
         --simulated-delay 6 --num-train-steps 10000 --fsdp-devices 2
 """
 
@@ -41,7 +41,9 @@ import jax.numpy as jnp
 import numpy as np
 from flax import nnx
 
-_REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+_REPO_ROOT = pathlib.Path(__file__).resolve().parent
+while not (_REPO_ROOT / "pyproject.toml").exists() and _REPO_ROOT.parent != _REPO_ROOT:
+    _REPO_ROOT = _REPO_ROOT.parent
 for _p in (str(_REPO_ROOT), str(_REPO_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
@@ -52,8 +54,8 @@ for _p in (str(_REPO_ROOT), str(_REPO_ROOT)):
 #   export OPENPI05_RAW_TRAIN_DIR=/path/to/raw_hdf5_dir
 CHECKPOINT_49999 = os.environ.get("OPENPI05_CHECKPOINT_49999", "")
 RAW_DATA_DIR = os.environ.get("OPENPI05_RAW_TRAIN_DIR", "")
-DEFAULT_CONFIG = "pi05-task_00031_yulong-xtrainer"
-DATASET_REPO_ID = "task_00031_yulong_train"
+DEFAULT_CONFIG = "pi05-task_00031_entong-xtrainer"
+DATASET_REPO_ID = "task_00031_entong_train"
 TASK_DESC = "Transfer the test tube from the right rack to the left rack."
 
 # In-process patch state. The training entry sets this *before* the parent

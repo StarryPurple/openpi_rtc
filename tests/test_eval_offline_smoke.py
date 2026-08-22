@@ -6,7 +6,7 @@ action), a fake policy that mimics the JAX ``Policy.infer`` surface
 ``evaluate_file`` in baseline and RTC modes and asserts the data flow and
 metrics.
 
-Run:  uv run python openpi_rtc/tests/test_eval_offline_smoke.py
+Run:  uv run python tests/test_eval_offline_smoke.py
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 

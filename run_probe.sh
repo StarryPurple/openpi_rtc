@@ -4,7 +4,7 @@
 # you can send back as-is.
 #
 # Usage (run on the GPU machine, from anywhere):
-#   bash openpi_rtc/run_probe.sh [checkpoint_dir] [hdf5_dir]
+#   bash run_probe.sh [checkpoint_dir] [hdf5_dir]
 #
 # Paths must be absolute; defaults come from env vars (or positional args):
 #   checkpoint = ${OPENPI05_CHECKPOINT_49999}
@@ -65,7 +65,7 @@ fi
     || echo "ERROR: jax import failed (wrong venv? missing deps?)"
 
   echo "=== probe ==="
-  $PY openpi_rtc/probe_checkpoint.py --checkpoint "$CKPT" --dataset "$DATA"
+  $PY probe_checkpoint.py --checkpoint "$CKPT" --dataset "$DATA"
 } 2>&1 | tee "$REPORT"
 
 echo

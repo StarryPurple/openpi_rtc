@@ -1,0 +1,2 @@
+# Huawei Cloud OBS Python SDK for obs_transfer.py (industrial PC channel)
+esdk-obs-python==3.26.6

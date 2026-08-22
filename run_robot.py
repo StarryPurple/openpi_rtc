@@ -7,7 +7,7 @@ checkpoint. The robot is provided by an adapter implementing
 ``reset_episode`` — see ``openpi_rtc.robot_xtrainer.XtrainerRobot``.
 
 Usage:
-  uv run python openpi_rtc/run_robot.py --mode rtc \
+  uv run python run_robot.py --mode rtc \
       --checkpoint <model dir> --robot openpi_rtc.robot_xtrainer:XtrainerRobot \
       --episodes 10
 """
@@ -24,7 +24,7 @@ from pathlib import Path
 
 import numpy as np
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
+_REPO_ROOT = Path(__file__).resolve().parent
 for _p in (_REPO_ROOT, str(_REPO_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
@@ -180,7 +180,7 @@ class EpisodeRunner:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--mode", choices=["baseline", "rtc"], default="rtc")
-    ap.add_argument("--config", default="pi05-task_00031_yulong-xtrainer")
+    ap.add_argument("--config", default="pi05-task_00031_entong-xtrainer")
     ap.add_argument("--checkpoint", required=True)
     ap.add_argument("--prompt", default=DEFAULT_PROMPT)
     ap.add_argument("--episodes", type=int, default=10)

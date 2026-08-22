@@ -9,7 +9,7 @@ continuity given the data, and is cross-checked against the measured latency
 (see ``measure_latency.py``).
 
 Usage (repo root, GPU machine):
-  uv run python openpi_rtc/sweep_d.py \
+  uv run python sweep_d.py \
       --checkpoint <49999 dir> \
       --dataset ${OPENPI05_RAW_TRAIN_DIR:-<hdf5_dir>} \
       --d-min 2 --d-max 6 --max-steps 200
@@ -23,7 +23,7 @@ import pathlib
 import sys
 from argparse import Namespace
 
-_REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+_REPO_ROOT = pathlib.Path(__file__).resolve().parent
 for _p in (str(_REPO_ROOT), str(_REPO_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
@@ -39,7 +39,7 @@ DEFAULT_PROMPT = "Transfer the test tube from the right rack to the left rack."
 
 def parse_args():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--config", default="pi05-task_00031_yulong-xtrainer")
+    ap.add_argument("--config", default="pi05-task_00031_entong-xtrainer")
     ap.add_argument("--checkpoint", required=True)
     ap.add_argument("--dataset", required=True)
     ap.add_argument("--prompt", default=DEFAULT_PROMPT)

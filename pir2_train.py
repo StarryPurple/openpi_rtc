@@ -21,7 +21,7 @@ deployment wiring and is NOT implemented in v1; the prefix is recomputed per
 inference call, which is correct but not yet "asynchronous".
 
 Training entry (GPU machine, repo root):
-    uv run python openpi_rtc/pir2_train.py --exp-name pir2_v1 \
+    uv run python pir2_train.py --exp-name pir2_v1 \
         --max-delay 8 --num-train-steps 10000 --fsdp-devices 2
 """
 
@@ -39,7 +39,9 @@ import jax.numpy as jnp
 import numpy as np
 from flax import nnx
 
-_REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+_REPO_ROOT = pathlib.Path(__file__).resolve().parent
+while not (_REPO_ROOT / "pyproject.toml").exists() and _REPO_ROOT.parent != _REPO_ROOT:
+    _REPO_ROOT = _REPO_ROOT.parent
 for _p in (str(_REPO_ROOT), str(_REPO_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
@@ -50,7 +52,7 @@ from openpi_rtc.rtc_train import _posemb_sincos_batch  # noqa: E402
 #   export OPENPI05_CHECKPOINT_49999=/path/to/49999
 #   export OPENPI05_RAW_TRAIN_DIR=/path/to/raw_hdf5_dir
 CHECKPOINT_49999 = os.environ.get("OPENPI05_CHECKPOINT_49999", "")
-DEFAULT_CONFIG = "pi05-task_00031_yulong-xtrainer"
+DEFAULT_CONFIG = "pi05-task_00031_entong-xtrainer"
 
 
 @dataclass
@@ -408,7 +410,7 @@ def main() -> int:
     ap.add_argument("--raw-dir",
                     default=os.environ.get("OPENPI05_RAW_TRAIN_DIR", ""),
                     help="raw XTrainer HDF5 dir (for fresh-machine convert)")
-    ap.add_argument("--dataset-repo-id", default="task_00031_yulong_train")
+    ap.add_argument("--dataset-repo-id", default="task_00031_entong_train")
     ap.add_argument("--prompt",
                     default="Transfer the test tube from the right rack to the left rack.")
     ap.add_argument(

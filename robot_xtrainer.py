@@ -23,7 +23,7 @@ RealSense serials as in ``scripts/dobot_config/dobot_settings.ini``, and the
 ``dobot_control`` package importable (run from that repo root, or install it).
 
 Run:
-    uv run python openpi_rtc/run_robot.py \
+    uv run python run_robot.py \
         --checkpoint <dir> --mode rtc \
         --robot openpi_rtc.robot_xtrainer:XtrainerRobot
 """

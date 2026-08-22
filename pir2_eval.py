@@ -4,12 +4,12 @@
 Mirrors ``eval_offline_train_rtc.py`` but wraps the policy with
 ``wrap_policy_for_pir2``. Separate entry point per method:
 
-  inference-RTC  -> openpi_rtc/eval_offline_rtc.py --mode rtc
-  train-RTC      -> openpi_rtc/eval_offline_train_rtc.py
-  piR2           -> openpi_rtc/pir2_eval.py
+  inference-RTC  -> eval_offline_rtc.py --mode rtc
+  train-RTC      -> eval_offline_train_rtc.py
+  piR2           -> pir2_eval.py
 
 Usage (repo root, GPU machine):
-  uv run python openpi_rtc/pir2_eval.py \
+  uv run python pir2_eval.py \
       --checkpoint <exp checkpoint dir> \
       --dataset ${OPENPI05_RAW_TRAIN_DIR:-<hdf5_dir>} \
       --inference-delay 7 --num-steps 10
@@ -24,7 +24,7 @@ import pathlib
 import sys
 from argparse import Namespace
 
-_REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+_REPO_ROOT = pathlib.Path(__file__).resolve().parent
 for _p in (str(_REPO_ROOT), str(_REPO_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
@@ -40,7 +40,7 @@ DEFAULT_PROMPT = "Transfer the test tube from the right rack to the left rack."
 
 def parse_args():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--config", default="pi05-task_00031_yulong-xtrainer")
+    ap.add_argument("--config", default="pi05-task_00031_entong-xtrainer")
     ap.add_argument("--checkpoint", required=True)
     ap.add_argument("--dataset", required=True)
     ap.add_argument("--prompt", default=DEFAULT_PROMPT)
