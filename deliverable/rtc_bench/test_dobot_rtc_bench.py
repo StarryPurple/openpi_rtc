@@ -74,29 +74,38 @@ CONTROL_HZ = 25.0
 PERIOD = 1.0 / CONTROL_HZ
 TICK_MS = PERIOD * 1000.0
 
+# 默认参考复位位姿（平台 robot_pose_init 同源；夹爪置开=1.0）。
+# 每集（含第一集）开始前都回到这里，保证起点一致。
+DEFAULT_RESET_POSE = np.concatenate([
+    np.deg2rad([-90, 30, -110, 20, 90, 90]),
+    [1.0],
+    np.deg2rad([90, -30, 110, -20, -90, -90]),
+    [1.0],
+]).astype(np.float32)
+
 # 模式 -> 模型映射（微调产物暂时占位；也可用 --checkpoint 覆盖）
 MODELS: dict[str, dict] = {
     "baseline": {
         "checkpoint": OPENPI_MAIN
-        / "checkpoints/pi05-task_00031_yulong-xtrainer/49999",
+        / "checkpoints/dobot/pi05-task_00031_yulong-xtrainer/49999",
         "config": "pi05-task_00031_yulong-xtrainer",
         "wrapper": None,
     },
     "rtc": {
         "checkpoint": OPENPI_MAIN
-        / "checkpoints/pi05-task_00031_yulong-xtrainer/49999",
+        / "checkpoints/dobot/pi05-task_00031_yulong-xtrainer/49999",
         "config": "pi05-task_00031_yulong-xtrainer",
         "wrapper": "rtc",
     },
     "train_rtc": {
         "checkpoint": OPENPI_MAIN
-        / "checkpoints/pi05-task_00031_entong-xtrainer/rtc_train_d7/49999",
+        / "checkpoints/dobot/pi05-task_00031_entong-xtrainer/rtc_train_d7/49999",
         "config": "pi05-task_00031_entong-xtrainer",
         "wrapper": "train_rtc",
     },
     "pir2": {
         "checkpoint": OPENPI_MAIN
-        / "checkpoints/pi05-task_00031_entong-xtrainer/pir2_v1/49999",
+        / "checkpoints/dobot/pi05-task_00031_entong-xtrainer/pir2_v1/49999",
         "config": "pi05-task_00031_entong-xtrainer",
         "wrapper": "pir2",
     },
@@ -172,15 +181,22 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--num-steps", type=int, default=10, help="πR² 去噪步数（10 或 1 快模式）")
     ap.add_argument("--arms", default="right", choices=["left", "right", "both"])
     ap.add_argument("--robot-type", default="Nova 2", choices=["Nova 2", "Nova 5"])
-    ap.add_argument("--episode-timeout-s", type=float, default=60.0)
+    ap.add_argument("--episode-timeout-s", type=float, default=30.0)
     ap.add_argument("--min-episode-s", type=float, default=10.0,
                     help="自动结束的最短运行秒数（防一开始回位误判）")
     ap.add_argument("--home-threshold-rad", type=float, default=0.1,
                     help="qpos 距起始位姿的最大偏差（rad）；设 0 禁用自动结束")
     ap.add_argument("--home-hold-s", type=float, default=1.0,
                     help="回到起始位姿需持续秒数才算完成")
-    ap.add_argument("--pose-check-rad", type=float, default=0.3,
-                    help="首动作与当前位姿的最大偏差(rad)；超限中止，防瞬间移动；0 禁用")
+    ap.add_argument("--pose-check-rad", type=float, default=0.52,
+                    help="首动作与当前位姿的最大偏差(rad)，默认 0.52≈30°（对齐旧 harness "
+                         "pose_check）；超限中止；0 禁用")
+    ap.add_argument("--interp-first", action=argparse.BooleanOptionalAction, default=True,
+                    help="首动作在允许范围内时插值逐步逼近（默认开），避免单步大动")
+    ap.add_argument("--joint-limit-rad", type=float, default=2.9,
+                    help="关节角绝对值上限(rad)；超限中止（防 rad/deg 混用等垃圾指令）；0 禁用")
+    ap.add_argument("--max-step-rad", type=float, default=0.35,
+                    help="相邻动作单步最大偏差(rad)；超限中止（比 safety 的 0.9 更严）；0 禁用")
     ap.add_argument("--record-dir", default=None,
                     help="录像根目录（默认 <openpi-main>/records）")
     ap.add_argument("--hdf5", default=None, help="probe 模式用 hdf5 帧代替真机观测")
@@ -189,6 +205,9 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--safety-off", action="store_true")
     ap.add_argument("--auto-reset", action="store_true",
                     help="episode 之间自动回到 reset_position（默认手动复位）")
+    ap.add_argument("--reset-pose", default="",
+                    help="14 个逗号分隔的关节角(弧度, 夹爪 0~1)，覆盖默认参考位姿；"
+                         "空=用平台复位位姿")
     return ap.parse_args()
 
 
@@ -245,16 +264,15 @@ def get_observation(env) -> dict:
     return {"state": state, "images": images, "prompt": PROMPT}
 
 
-def auto_reset(env, arms: str) -> None:
-    """移动到 reset 位姿（与平台 robot_pose_init 同源）。"""
-    reset_left = np.deg2rad([-90, 30, -110, 20, 90, 90, 20])
-    reset_right = np.deg2rad([90, -30, 110, -20, -90, -90, 20])
-    target = np.concatenate([reset_left, reset_right]).astype(np.float32)
+def auto_reset(env, target: np.ndarray) -> None:
+    """插值移动到目标位姿（默认用第一集开始时的位姿，保证与策略起点一致）。"""
+    target = np.asarray(target, dtype=np.float32)
     curr = np.asarray(env.get_observation()["qpos"], dtype=np.float32)
     steps = min(int(np.abs(curr - target).max() / 0.01), 100)
     for jnt in np.linspace(curr, target, steps):
         env.step(jnt)  # RealEnv.step(action, single_arm=True)，不要传数组
         time.sleep(PERIOD)
+    time.sleep(1.0)  # 等机械臂稳定，避免下一集首动作观测未稳定
 
 
 # ---------------------------------------------------------------------------
@@ -301,19 +319,22 @@ class BenchRunner:
         self._stop = threading.Event()
         self._prev_state = None
         self._last_action = None
+        self._latest_obs = None
         self.safety = SafetyConfig(enabled=not args.safety_off, robot_type=args.robot_type)
 
     def _delay_ticks(self) -> int:
         if not self._latency_ms:
             return 7
-        return max(1, math.ceil(float(np.mean(self._latency_ms)) / TICK_MS))
+        # 上限 16 tick（640ms）：防止编译等异常样本把 d 估爆（正常预算 ≤8）
+        return min(max(1, math.ceil(float(np.mean(self._latency_ms)) / TICK_MS)), 16)
 
     def _inference_worker(self) -> None:
         while not self._stop.is_set():
             if self.queue.qsize() > 10:
                 time.sleep(PERIOD)
                 continue
-            obs = get_observation(self.env)
+            # 用 executor 最新观测，避免两个线程并发读 RealSense
+            obs = self._latest_obs if self._latest_obs is not None else get_observation(self.env)
             cur_state = np.asarray(obs["state"], dtype=np.float32)
             t0 = time.perf_counter()
             if self.rtc_enabled:
@@ -340,6 +361,36 @@ class BenchRunner:
             self.queue.merge(raw, actions, self._delay_ticks())
             if self.rtc_enabled:
                 self._prev_state = cur_state
+            else:
+                # baseline：执行完整个 chunk 再推理，避免多 chunk 交错导致漂移
+                # （与平台 harness 的“推理一次→执行完→再推理”一致）
+                while self.queue.qsize() > 0 and not self._stop.is_set():
+                    time.sleep(PERIOD / 4)
+
+    def warmup(self, n: int = 3) -> None:
+        """开跑前预热：吃掉 JAX 编译时间，避免污染延迟窗口。"""
+        print(f"policy warmup x{n} ...")
+        obs = get_observation(self.env)
+        for _ in range(n):
+            self.policy.infer(obs)
+        self._latency_ms.clear()
+        print("warmup done")
+
+    def _listen_early_stop(self, stop_ev: threading.Event) -> None:
+        """非阻塞监听回车：按一次提前结束本集（不阻塞 25Hz 主循环）。"""
+        import select
+
+        while not stop_ev.is_set() and not self._episode_early.is_set():
+            try:
+                ready, _, _ = select.select([sys.stdin], [], [], 0.1)
+            except (ValueError, OSError):
+                return
+            if ready:
+                line = sys.stdin.readline()
+                if line == "":  # stdin 已关闭/EOF（非交互），不误触发
+                    continue
+                self._episode_early.set()
+                return
 
     def run_episode(self, recorder: Recorder) -> dict:
         self.queue.clear()
@@ -347,6 +398,13 @@ class BenchRunner:
         self._prev_state = None
         self._last_action = None
         self._stop.clear()
+        self._episode_early = threading.Event()
+        ep_stop = threading.Event()
+        listener = threading.Thread(
+            target=self._listen_early_stop, args=(ep_stop,), daemon=True
+        )
+        listener.start()
+        print("本集按 回车 可提前结束（否则 30s 超时）")
         worker = threading.Thread(target=self._inference_worker, daemon=True)
         worker.start()
         t_start = time.monotonic()
@@ -356,12 +414,44 @@ class BenchRunner:
         latencies = []
         ended_by = "timeout"
         try:
-            while time.monotonic() - t_start < self.args.episode_timeout_s:
+            while (
+                time.monotonic() - t_start < self.args.episode_timeout_s
+                and not self._episode_early.is_set()
+            ):
                 t0 = time.perf_counter()
                 action = self.queue.get()
                 if action is not None:
                     obs = self.env.get_observation()
+                    # worker 需要 openpi 格式观测（state/images/prompt），
+                    # 录像需要原始帧（HWC BGR），两个都从这里派生
+                    self._latest_obs = {
+                        "state": np.asarray(obs["qpos"], dtype=np.float32),
+                        "images": {
+                            cam: obs["images"][cam].swapaxes(0, 2).swapaxes(1, 2)
+                            for cam in ("cam_high", "cam_left_wrist", "cam_right_wrist")
+                        },
+                        "prompt": PROMPT,
+                    }
                     cur_qpos = np.asarray(obs["qpos"], dtype=np.float32)
+                    # 硬保护 1：关节角必须在物理范围内（rad/deg 混用会直接爆表）
+                    if self.args.joint_limit_rad > 0:
+                        max_j = float(np.abs(action[:13]).max())
+                        if max_j > self.args.joint_limit_rad:
+                            raise RuntimeError(
+                                f"动作关节角超限 {max_j:.2f} rad > {self.args.joint_limit_rad}，"
+                                "中止（疑似单位/映射错误）"
+                            )
+                    # 硬保护 2：非首动作的单步偏差收紧（0.9 太松，允许快速过冲）
+                    if self._last_action is not None and self.args.max_step_rad > 0:
+                        step = float(np.abs(action[:13] - self._last_action[:13]).max())
+                        if step > self.args.max_step_rad:
+                            raise RuntimeError(
+                                f"单步动作偏差 {step:.3f} rad > {self.args.max_step_rad}，"
+                                "中止（疑似持续上行/垃圾动作）\n"
+                                f"  当前动作[:13]: {action[:13]}\n"
+                                f"  上一动作[:13]: {self._last_action[:13]}\n"
+                                f"  当前位姿[:13]: {cur_qpos[:13]}"
+                            )
                     if self._last_action is None and self.args.pose_check_rad > 0:
                         # 首动作没有 last_action 可对比，直接与当前位姿比对，防瞬间移动
                         dev = float(np.abs(action[:13] - cur_qpos[:13]).max())
@@ -371,6 +461,20 @@ class BenchRunner:
                                 f"{self.args.pose_check_rad}，已中止（防止瞬间移动；"
                                 "请确认机械臂在起始位姿、观测正常）"
                             )
+                        if dev > 0.02 and self.args.interp_first:
+                            # 像旧 harness 的 dynamic_approach：分小步逼近首动作
+                            n = min(int(np.ceil(dev / 0.05)), 25)
+                            print(f"首动作偏差 {dev:.3f} rad，插值 {n} 步逼近")
+                            for jnt in np.linspace(cur_qpos, action, n):
+                                check_action(jnt, self._last_action, self.safety)
+                                self._last_action = jnt.copy()
+                                self.env.step(jnt)
+                                self.env.step_gripper(jnt)
+                                actions_sent += 1
+                                time.sleep(PERIOD)
+                            # 已到位，本 tick 不再重复发送 action
+                            latencies.extend(list(self._latency_ms))
+                            continue
                     check_action(action, self._last_action, self.safety)
                     self._last_action = action.copy()
                     self.env.step(action)  # RealEnv.step(action, single_arm=True)
@@ -399,8 +503,12 @@ class BenchRunner:
                 if rem > 0:
                     time.sleep(rem)
         finally:
+            ep_stop.set()
             self._stop.set()
             worker.join(timeout=5)
+        if self._episode_early.is_set():
+            ended_by = "manual"
+            print("人工提前结束本集")
         return {
             "actions_sent": actions_sent,
             "mean_infer_ms": float(np.mean(latencies)) if latencies else None,
@@ -469,10 +577,25 @@ def main() -> int:
     record_root = pathlib.Path(args.record_dir or OPENPI_MAIN / "records")
 
     env = make_env(args)
+    if args.reset_pose:
+        vals = [float(x) for x in args.reset_pose.split(",")]
+        if len(vals) != 14:
+            sys.exit("ERROR: --reset-pose 需要 14 个值（6关节+夹爪）×2臂")
+        reset_pose = np.asarray(vals, dtype=np.float32)
+    else:
+        reset_pose = DEFAULT_RESET_POSE
     if args.auto_reset:
-        auto_reset(env, args.arms)
+        print("启动自动复位到参考位姿 ...")
+        auto_reset(env, reset_pose)
+    home_qpos = np.asarray(env.get_observation()["qpos"], dtype=np.float32)
+    if not args.auto_reset:
+        print("(未开 --auto-reset：每集起点=当前人工摆放位姿)")
 
     runner = BenchRunner(policy, env, args, model_name)
+    if args.warmup > 0:
+        runner.warmup(args.warmup)
+    else:
+        print("warmup 已关闭（首次推理编译会占用第一集开头几秒）")
     for ep in range(1, args.episodes + 1):
         recorder = Recorder(record_root, model_name, args.mode)
         print(f"\n===== episode {ep}/{args.episodes} (mode={args.mode}) =====")
@@ -502,9 +625,8 @@ def main() -> int:
         print(f"episode {ep}: {stats}")
         if ep < args.episodes:
             if args.auto_reset:
-                auto_reset(env, args.arms)
-            else:
-                input("请人工复位场景/机械臂后按回车开始下一集 ...")
+                auto_reset(env, home_qpos)
+            input("请人工放置试管/复位场景后按回车开始下一集 ...")
     return 0
 
 

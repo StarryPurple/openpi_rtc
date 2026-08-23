@@ -5,8 +5,8 @@
 ```text
 openpi-main/
 ├── checkpoints/
-│   └── pi05-task_00031_yulong-xtrainer/49999/{params,assets}   ← 49999（单独 OBS 传）
-│       （微调产物以后放：pi05-task_00031_entong-xtrainer/rtc_train_d7/49999/ 等）
+│   └── dobot/pi05-task_00031_yulong-xtrainer/49999/{params,assets}   ← 49999（单独 OBS 传）
+│       （微调产物以后放：dobot/pi05-task_00031_entong-xtrainer/rtc_train_d7/49999/ 等）
 ├── records/                          ← 运行时自动创建
 │   └── <模型名>/<mode>/episode_N/*.avi + episode_N.json
 └── rtc_bench/                        ← 本包 rtc_bench/ 目录整体拷到这里
@@ -39,9 +39,9 @@ openpi-main/
 
 ```bash
 tar -xzf yulong.tar.gz     # 生成 inspire/qb-ilm/.../default_pi05/49999/
-mkdir -p openpi-main/checkpoints/pi05-task_00031_yulong-xtrainer
+mkdir -p openpi-main/checkpoints/dobot/pi05-task_00031_yulong-xtrainer
 mv inspire/qb-ilm/project/robot-reasoning/xuyue-p-xuyue/ziyu/checkpoints/g100_pi/pi05-task_00031_yulong-xtrainer/default_pi05/49999 \
-   openpi-main/checkpoints/pi05-task_00031_yulong-xtrainer/49999
+   openpi-main/checkpoints/dobot/pi05-task_00031_yulong-xtrainer/49999
 rm -rf inspire            # 清理残留路径；train_state 推理不需要，可一并删
 ```
 
@@ -89,7 +89,7 @@ python rtc_bench/test_dobot_rtc_bench.py --mode pir2 --episodes 5 [--num-steps 1
 
 常用参数：`--episodes`、`--inference-delay`（固定 d，默认自动）、`--execution-horizon`、
 `--max-guidance-weight`、`--schedule`、`--arms left|right|both`、`--robot-type "Nova 2"|"Nova 5"`、
-`--episode-timeout-s`（默认 60）、`--record-dir`、`--auto-reset`、`--safety-off`（不建议）。
+`--episode-timeout-s`（默认 30）、`--record-dir`、`--auto-reset`、`--safety-off`（不建议）。
 
 ## 输出
 
@@ -106,6 +106,7 @@ openpi-main/records/<模型名>/<mode>/
 - 脚本强制使用 `rtc_bench/openpi`（vendored，含 task 注册），不碰 openpi-main 的
   `src/openpi`；启动自检 `import openpi` 路径不对会直接报错。
 - 安全层默认开（有限值/J3/单步 0.9 rad/FK 工作区），`--robot-type` 必须与实机一致。
+- 每集运行中按 **回车** 可提前结束本集（`ended_by="manual"`），否则 30s 超时；
 - episode 之间默认人工复位场景（回车继续）；`--auto-reset` 会自行回位（仍建议人守急停）。
 - 首次实机先 `--episodes 1`，人守急停。
 - probe 的 d 是 p95+1 裕量；train-RTC 需 `d <= simulated_delay-1`，πR² 需 `d <= max_delay`
