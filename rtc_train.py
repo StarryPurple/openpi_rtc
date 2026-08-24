@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import os
 import pathlib
+import shutil
 import sys
 from typing import Any
 
@@ -413,9 +414,14 @@ def ensure_dataset_and_norm_stats(
             "ERROR: 需要原始 HDF5 目录: 传 --raw-dir 或设 OPENPI05_RAW_TRAIN_DIR"
         )
     dataset_dir = HF_LEROBOT_HOME / repo_id
-    if dataset_dir.exists():
+    dataset_valid = (dataset_dir / "meta" / "info.json").exists()
+    if dataset_valid:
         print(f"dataset {repo_id} already exists; skipping convert.")
     else:
+        if dataset_dir.exists():
+            print(f"dataset {repo_id} exists but is incomplete; rebuilding.")
+            if not dry_run:
+                shutil.rmtree(dataset_dir)
         _run_command(
             [
                 "uv", "run",
@@ -423,6 +429,7 @@ def ensure_dataset_and_norm_stats(
                 "--raw-dir", raw_dir,
                 "--repo-id", repo_id,
                 "--task", prompt,
+                "--mode", "video",
             ],
             "convert raw hdf5 -> lerobot",
             dry_run,
@@ -497,26 +504,29 @@ def main() -> int:
 
     patch_pi0_for_train_rtc(args.simulated_delay)
 
-    argv = [
-        "train.py",
-        args.config,
-        "--exp_name", args.exp_name,
-        "--batch_size", str(args.batch_size),
-        "--num_train_steps", str(args.num_train_steps),
-        "--num_workers", str(args.num_workers),
-        "--save_interval", str(args.save_interval),
-        "--keep_period", str(args.keep_period),
-        "--weight_loader.checkpoint_path", args.checkpoint,
-        "--wandb_enabled", "true" if args.wandb_enabled else "false",
-    ]
-    if args.fsdp_devices is not None:
-        argv += ["--fsdp_devices", str(args.fsdp_devices)]
-    sys.argv = argv
-
+    # Build the TrainConfig by hand: get_config() does not apply tyro CLI
+    # overrides, and the old ``--weight_loader.checkpoint_path`` argv did not
+    # match the loader's actual field name (``params_path``).
+    import dataclasses
     from openpi.training import config as _config
+    from openpi.training import weight_loaders as _weight_loaders
     from scripts import train as _train
 
-    _train.main(_config.cli())
+    cfg = _config.get_config(args.config)
+    cfg = dataclasses.replace(
+        cfg,
+        exp_name=args.exp_name,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        num_train_steps=args.num_train_steps,
+        save_interval=args.save_interval,
+        keep_period=args.keep_period,
+        wandb_enabled=args.wandb_enabled,
+        weight_loader=_weight_loaders.CheckpointWeightLoader(args.checkpoint),
+    )
+    if args.fsdp_devices is not None:
+        cfg = dataclasses.replace(cfg, fsdp_devices=args.fsdp_devices)
+    _train.main(cfg)
     return 0
 
 

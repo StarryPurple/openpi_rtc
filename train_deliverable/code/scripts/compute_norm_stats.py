@@ -6,6 +6,7 @@ to the config assets directory.
 """
 
 import numpy as np
+import pathlib
 import tqdm
 import tyro
 
@@ -90,8 +91,14 @@ def create_rlds_dataloader(
 def main(config_name: str, max_frames: int | None = None):
     config = _config.get_config(config_name)
     data_config = config.data.create(config.assets_dirs, config.model)
-    
-    output_path = config.assets_dirs / data_config.repo_id
+
+    # Write to the same assets dir the data loader reads from
+    # (AssetsConfig.assets_dir + asset_id). For XTrainer configs the
+    # assets dir is "pi0-{task}-xtrainer" even for pi05 model_type, so
+    # config.assets_dirs (which uses config.name, e.g. "pi05-...") is wrong.
+    assets_dir = pathlib.Path(config.data.assets.assets_dir or config.assets_dirs)
+    asset_id = config.data.assets.asset_id or data_config.repo_id
+    output_path = assets_dir / asset_id
     if (output_path / "norm_stats.json").exists():
         print(f"Stats already exists!")
     else:
