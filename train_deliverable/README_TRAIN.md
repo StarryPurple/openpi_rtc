@@ -1,5 +1,8 @@
 # 训练机交付物（train_deliverable）
 
+> 给 Agent / 接手人：先读同目录的 `MACHINE_GUIDE.md`（机器现状、已踩的坑、
+> 下一步），再配合本文档使用。
+
 ## 结构
 
 ```text
