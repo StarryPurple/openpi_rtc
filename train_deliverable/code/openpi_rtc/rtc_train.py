@@ -522,7 +522,8 @@ def main() -> int:
         save_interval=args.save_interval,
         keep_period=args.keep_period,
         wandb_enabled=args.wandb_enabled,
-        weight_loader=_weight_loaders.CheckpointWeightLoader(args.checkpoint),
+        weight_loader=_weight_loaders.CheckpointWeightLoader(
+            os.path.join(args.checkpoint, "params")),
     )
     if args.fsdp_devices is not None:
         cfg = dataclasses.replace(cfg, fsdp_devices=args.fsdp_devices)
