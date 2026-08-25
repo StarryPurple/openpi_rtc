@@ -118,6 +118,15 @@ openpi-main/records/<模型名>/<mode>/
 - 脚本复用 openpi-main 的 `src/openpi`，并把 yulong/light/entong 的
   TrainConfig 注入 openpi 的 config 注册表（不改 openpi-main 文件）；
   启动自检 `import openpi` 路径不对会直接报错。
+- **工控机底层契约（2026-08-26 对方确认，勿回改）**：
+  * `DobotRobot.command_joint_state` 收**度数**（内部不再 rad2deg）；
+  * `DobotRobot.get_joint_state` 仍返回**弧度**；
+  * `RealEnv.step_gripper` 的 `both` 分支左右切片已按对方（右臂在前）
+    布局互换。
+  bench 适配：内部/安全检查/位姿对比全部保持**弧度**，仅在发送边界用
+  `rad_to_deg` 转度数（夹爪 0~1 不变）；双臂时用 `send_gripper` 直接按
+  本 bench 左臂在前布局调用两台机器人的夹爪，绕过上游互换分支。
+  单臂（默认 right）不受 step_gripper 互换影响。
 - **2026-08-25 修复（必须同步更新）**：
   * 根因：`rtc_embed_suffix` / `pir2_embed_suffix` 给 adaRMS 传了
     `(B,H,D)` 逐位置 cond，而 RMSNorm 只支持 `(B,D)` 逐样本，广播成 4 维后

@@ -158,23 +158,31 @@ def probe_robot(root: pathlib.Path, move_test: bool, with_gripper: bool) -> None
         log("[微动探针] 跳过（加 --move-test 启用；会真实移动右臂 J0 约 3°）")
         return
 
-    # 微动探针：右臂 J0 +0.05 rad (~3°)，读回，再恢复
+    # 微动探针（新契约：command_joint_state 收度数，get_joint_state 返回弧度）：
+    # 右臂 J0 +5°（0.0873 rad），以度数发送，读回弧度增量应≈+0.0873。
     try:
         q0 = [float(x) for x in env.get_observation()["qpos"]]
-        cmd = list(q0)
-        cmd[7] += 0.05  # 右臂 J0（左臂在前，右臂起点下标 7）
-        log(f"[微动] 发送右臂 J0 +0.05 rad，当前 J0={q0[7]:.4f}")
-        env.step(np_from_list(cmd))
+        cmd = np_from_list(q0)
+        cmd[7] += 0.0873  # 右臂 J0 +5°（弧度，左臂在前右臂起点下标 7）
+        # 发送边界：仅 12 关节转度数，夹爪 0~1 不变（新契约）
+        cmd_deg = cmd.copy()
+        cmd_deg[0:6] = np.rad2deg(cmd[0:6])
+        cmd_deg[7:13] = np.rad2deg(cmd[7:13])
+        log(f"[微动] 发送右臂 J0 +5°（当前弧度 J0={q0[7]:.4f}，发角度 {cmd_deg[7]:.2f}）")
+        env.step(cmd_deg)
         time.sleep(1.5)
         q1 = [float(x) for x in env.get_observation()["qpos"]]
-        log(f"[微动] 读回 J0={q1[7]:.4f}，增量={q1[7] - q0[7]:+.4f}（期望≈+0.05）")
+        log(f"[微动] 读回 J0={q1[7]:.4f} rad，增量={q1[7] - q0[7]:+.4f}（期望≈+0.0873）")
         # 恢复
-        cmd2 = list(q1)
+        cmd2 = np_from_list(q1)
         cmd2[7] = q0[7]
-        env.step(np_from_list(cmd2))
+        cmd2_deg = cmd2.copy()
+        cmd2_deg[0:6] = np.rad2deg(cmd2[0:6])
+        cmd2_deg[7:13] = np.rad2deg(cmd2[7:13])
+        env.step(cmd2_deg)
         time.sleep(1.2)
         q2 = [float(x) for x in env.get_observation()["qpos"]]
-        log(f"[微动] 恢复后 J0={q2[7]:.4f}（期望回到≈{q0[7]:.4f}）")
+        log(f"[微动] 恢复后 J0={q2[7]:.4f} rad（期望回到≈{q0[7]:.4f}）")
     except Exception as e:  # noqa: BLE001
         log(f"[微动探针失败] {type(e).__name__}: {e}")
 
