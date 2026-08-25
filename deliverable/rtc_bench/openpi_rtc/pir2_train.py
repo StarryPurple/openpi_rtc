@@ -25,11 +25,12 @@ v2 (slow channel + single-step streaming)
    no-op, so the base-policy behaviour is preserved).
 
    Deviation from the paper: the paper adds the delay embedding to the slow
-   representation itself; we add it to the action expert's per-position AdaRMS
-   conditioning instead, because with a cached KV the slow features are fixed
-   between refreshes and cannot carry a per-call delay. The conditioning is
-   trained and deployed identically (stale prefix + embedding of its age), so
-   the model learns the same "how stale is my vision" signal.
+   representation itself; we add it (together with the per-position staircase
+   time) to the action tokens, and keep the adaRMS cond per-sample (B, D) —
+   the base pi0.5 contract — so openpi-main's gemma needs no modification.
+   The conditioning is trained and deployed identically (stale prefix +
+   embedding of its age), so the model learns the same "how stale is my
+   vision" signal.
 4. Latency-adaptive inference: instead of re-denosing a full chunk from
    scratch every call, deployment keeps a persistent buffer x_t (H, A) plus
    the staircase times and advances it by ONE Euler substep per call,
@@ -233,7 +234,13 @@ def pir2_embed_suffix(
     to the prefix only, action tokens attend causally to prefix+state+earlier
     actions. ``timestep`` is shape (*B, H) (per-action time levels); the state
     token gets time 0 (clean). ``slow_delay`` (*B,) optionally adds the learned
-    slow-channel staleness embedding to the per-position AdaRMS conditioning.
+    slow-channel staleness embedding to the per-position time embedding.
+
+    Conditioning contract: pi0.5's adaRMS only accepts a per-sample (B, D)
+    cond (openpi-main 的 gemma 不支持 (B, T, D) 逐位置 cond，且我们不修改
+    rtc_bench 之外的文件)。因此逐位置（阶梯/斜坡）时间**注入 action tokens**，
+    adarms_cond 用逐样本代表时间（取末位置，非 stream 共享时间下即样本时间），
+    保持 (B, D) —— 训练与推理共用本函数，自洽。
     """
     if not getattr(model, "pi05", True):
         raise NotImplementedError("πR² v1 requires pi05 models")
@@ -264,13 +271,25 @@ def pir2_embed_suffix(
     time_emb = nnx.swish(time_emb)
     if slow_delay is not None:
         # Learned delay embedding: how stale the cached vision/language prefix
-        # is (zero at delay=0). Added to the per-position AdaRMS conditioning.
+        # is (zero at delay=0). Added to the per-position time embedding.
         time_emb = time_emb + pir2_delay_embedding(model, slow_delay)[:, None, :]
-    # The state token carries no denoising time (it is always "now").
-    adarms_cond = jnp.concatenate(
-        [jnp.zeros((batch, 1, time_emb.shape[-1]), dtype=time_emb.dtype), time_emb],
-        axis=1,
+    # 逐位置时间注入 action tokens；state token 不带时间（现在态）。
+    action_tokens = action_tokens + time_emb
+    tokens = jnp.concatenate([state_token, action_tokens], axis=1)
+
+    # 逐样本代表时间 -> (B, D) cond（原始 pi0.5 契约，gemma 无需改动）。
+    sample_time = timestep[..., -1:]
+    cond_emb = _posemb_sincos_batch(
+        sample_time,
+        model.action_in_proj.out_features,
+        min_period=4e-3,
+        max_period=4.0,
     )
+    cond_emb = model.time_mlp_in(cond_emb)
+    cond_emb = nnx.swish(cond_emb)
+    cond_emb = model.time_mlp_out(cond_emb)
+    cond_emb = nnx.swish(cond_emb)
+    adarms_cond = cond_emb[..., 0, :]  # (B, D)
 
     input_mask = jnp.ones((batch, 1 + model.action_horizon), dtype=jnp.bool_)
     ar_mask = jnp.concatenate(

@@ -57,7 +57,7 @@ ln -s $BOS/train_out checkpoints/qb-ilm-ckpts/g100_pi
 # dry-run 先看调用
 uv run python -m openpi_rtc.rtc_train --exp-name rtc_train_d7 --simulated-delay 8 \
   --num-train-steps 10000 --fsdp-devices 2 --dry-run
-uv run python -m openpi_rtc.pir2_train --exp-name pir2_v1 --max-delay 8 \
+uv run python -m openpi_rtc.pir2_train --exp-name pir2_v2 --max-delay 8 \
   --num-train-steps 10000 --fsdp-devices 2 --dry-run
 
 # 正式跑
@@ -106,7 +106,7 @@ code/checkpoints/qb-ilm-ckpts/g100_pi/pi05-task_00031_entong-xtrainer/<exp_name>
 
 ```text
 openpi-main/checkpoints/pi05-task_00031_entong-xtrainer/rtc_train_d7/<step>/
-openpi-main/checkpoints/pi05-task_00031_entong-xtrainer/pir2_v1/<step>/
+openpi-main/checkpoints/pi05-task_00031_entong-xtrainer/pir2_v2/<step>/
 ```
 
 工控机 bench 的 `MODELS` 表里占位 step 是 49999，实际 step 不同时用

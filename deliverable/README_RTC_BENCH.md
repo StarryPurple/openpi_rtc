@@ -69,12 +69,6 @@ mv <deliverable>/rtc_bench openpi-main/rtc_bench
 ```bash
 cd openpi-main
 
-# 0.5) πR² 模式前置：给 openpi-main 的 gemma 打逐位置 adaRMS 补丁（仅 pir2 需要）
-#       train_rtc / rtc / baseline 不需要。补丁向后兼容（2 维 cond 路径不变）。
-patch -p1 < rtc_bench/gemma_adarms_3d.patch
-#       若上下文对不上，手动改 openpi-main/src/openpi/models/gemma.py：
-#       RMSNorm 的 adaptive 分支加 `if cond.ndim == 2: ... else: ...`（见补丁）
-
 # 0) 自检：确认复用 openpi-main 的 src/openpi（而不是残留的 rtc_bench/openpi）
 python -c "import openpi; print(openpi.__file__)"   # 应显示 .../openpi-main/src/openpi/__init__.py
 
@@ -91,7 +85,7 @@ python rtc_bench/test_dobot_rtc_bench.py --mode rtc --episodes 5
 # 4) 微调产物（**必须用修复后代码重训**，见下方修复记录；--checkpoint 覆盖路径）
 #    train-RTC 微调产物：
 python rtc_bench/test_dobot_rtc_bench.py --mode train_rtc --episodes 5 [--checkpoint <路径>]
-#    πR² 微调产物（需要已打 gemma 补丁）：
+#    πR² 微调产物：
 python rtc_bench/test_dobot_rtc_bench.py --mode pir2 --episodes 5 [--num-steps 10]
 python rtc_bench/test_dobot_rtc_bench.py --mode pir2 --slow-channel --episodes 5
     # πR² 慢通道 + 单步流（论文 fast mode）：前缀 KV 异步缓存，每
@@ -124,6 +118,9 @@ openpi-main/records/<模型名>/<mode>/
   * **夹爪物理交叉（实测确认）**：`_robot_l`(192.168.5.1) 的夹爪对象驱动
     【任务】夹爪，`_robot_r`(192.168.5.2) 的夹爪对象驱动【未用】夹爪；
     方向与归一化一致（move(255)=开、move(0)=关，即 1=开、0=关）。
+  * **不修改 openpi-main 任何文件**：pir2 的逐位置时间通过 action tokens
+    注入，adarms_cond 保持逐样本 (B,D)（与 rtc_train 相同契约），gemma
+    无需补丁。
   bench 适配：内部/安全检查/位姿对比全部保持**弧度**，仅在发送边界用
   `rad_to_deg` 转度数（夹爪 0~1 不变）；夹爪用 `send_gripper` 按交叉路由
   发送（任务夹爪值 action[13] → `_robot_l` 经 [7:]，未用夹爪值 action[6]
@@ -135,10 +132,9 @@ openpi-main/records/<模型名>/<mode>/
     "Einstein sum subscript 'BTD' does not contain the correct number of
     indices"（train_rtc 工控机实测报错）。训练同样会炸。
   * rtc_train：`rtc_embed_suffix` 已改回逐样本 `(B,D)` cond（Kinetix 语义：
-    前缀靠 x_t 钳制 + loss mask），train_rtc 模式不需要 gemma 补丁。
-  * pir2：逐位置阶梯时间确实需要，故给 gemma 的 RMSNorm 增加 3 维 cond
-    支持（本包 `gemma_adarms_3d.patch`，2 维路径不变），并更新
-    `Module.__call__` 注解。pir2 模式必须打补丁。
+    前缀靠 x_t 钳制 + loss mask）。
+  * pir2：逐位置阶梯时间改为注入 action tokens，adarms_cond 保持逐样本
+    `(B,D)` —— 全程不修改 openpi-main 的 gemma。
   * 两个采样器补上 `execution_horizon` 参数（bench 会传，旧版会 TypeError）。
   * **旧训练产物作废**：修复改变了训练计算，rtc_train / pir2 必须用
     训练机上的新代码（train_code.tar.gz 含新 rtc_train.py / pir2_train.py /
@@ -165,10 +161,31 @@ python rtc_bench/test_dobot_rtc_bench.py --mode rtc --episodes 3
 python rtc_bench/test_dobot_rtc_bench.py --mode train_rtc --episodes 3 \
   --checkpoint checkpoints/dobot/pi05-task_00031_entong-xtrainer/rtc_train_d7/<step>
 
-# ④ πR²（重训产物 + 已打 gemma 补丁）
+# ④ πR²（重训产物；无需修改 openpi-main）
 python rtc_bench/test_dobot_rtc_bench.py --mode pir2 --episodes 3 \
   --checkpoint checkpoints/dobot/pi05-task_00031_entong-xtrainer/pir2_v2/<step>
 ```
 
 产物都在 `records/<模型名>/<mode>/episode_N/`；每个 mode 跑完核对
 `episode_N.json` 的 ended_by（home/timeout/manual）和动作统计。
+
+## 脚本冒烟（未重训前，用已有产物验证代码链路）
+
+train_rtc / pir2 模式可先用**之前训练出的产物**（即使已知是旧版错误条件
+下训练的，脚本链路验证不受影响；效果好坏另说）：
+
+```bash
+cd openpi-main
+
+# train_rtc 冒烟
+python rtc_bench/test_dobot_rtc_bench.py --mode train_rtc --episodes 1 \
+  --checkpoint checkpoints/dobot/pi05-task_00031_entong-xtrainer/rtc_train_d7/<step>
+
+# pir2 冒烟（不需要改 openpi-main；逐位置时间注入 token、cond 保持 (B,D)）
+python rtc_bench/test_dobot_rtc_bench.py --mode pir2 --episodes 1 \
+  --checkpoint checkpoints/dobot/pi05-task_00031_entong-xtrainer/pir2_v2/<step>
+```
+
+若之前产物尚未放到工控机，可先用 yulong 49999 冒烟（补 `--config
+pi05-task_00031_yulong-xtrainer`），pir2 会提示缺少 state_proj/
+slow_delay_embed 并随机初始化（WARN 属正常）。
