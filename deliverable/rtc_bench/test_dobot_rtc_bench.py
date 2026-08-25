@@ -514,11 +514,11 @@ class BenchRunner:
             # ───────────────────────────────────────────────────────────────
             t0 = time.perf_counter()
             prev_len = 0
+            executed_used = None
+            prev0_maxabs = None
             if self.rtc_enabled:
                 prev_raw = getattr(self.policy, "last_raw_chunk", None)
                 prev = None
-                executed_used = None
-                prev0_maxabs = None
                 if prev_raw is not None and self._prev_state is not None:
                     full = self.policy.prepare_prev_chunk(prev_raw, self._prev_state, cur_state)
                     h = full.shape[0]
