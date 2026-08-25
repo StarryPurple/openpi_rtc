@@ -290,6 +290,8 @@ def pir2_embed_suffix(
     cond_emb = model.time_mlp_out(cond_emb)
     cond_emb = nnx.swish(cond_emb)
     adarms_cond = cond_emb[..., 0, :]  # (B, D)
+    if adarms_cond.ndim == 1:  # 无 batch 的防御：补回 (1, D)
+        adarms_cond = adarms_cond[None, :]
 
     input_mask = jnp.ones((batch, 1 + model.action_horizon), dtype=jnp.bool_)
     ar_mask = jnp.concatenate(
