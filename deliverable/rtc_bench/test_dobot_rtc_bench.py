@@ -146,18 +146,23 @@ def rad_to_deg(a) -> np.ndarray:
 
 
 def send_gripper(env, action, arms: str) -> None:
-    """夹爪发送：单臂走 RealEnv.step_gripper；双臂绕过上游互换的 both 分支。
+    """夹爪路由（物理交叉已实测确认）。
 
-    上游 RealEnv.step_gripper 的 both 分支把左右切片对调（对方契约，按
-    右臂在前布局）；我们的动作布局是左臂在前（与 hdf5/数据集一致），
-    所以双臂时直接按我们的切片调用两台机器人的夹爪。
+    实测：_robot_l(192.168.5.1) 的夹爪对象驱动【任务】物理夹爪，
+    _robot_r(192.168.5.2) 的夹爪对象驱动【未用】物理夹爪。
+    方向已确认与归一化一致：move(255)=开、move(0)=关（1=开、0=关）。
+    因此单臂/双臂都按"左臂在前"的动作布局把正确的切片发到正确的对象：
+      任务夹爪值 action[13] -> _robot_l 经 action[7:]（[-1]=action[13]）
+      未用夹爪值 action[6]  -> _robot_r 经 action[:7]（[-1]=action[6]）
     """
     action = np.asarray(action, dtype=np.float32)
-    if arms == "both":
-        env._robot_l.command_joint_state_gripper(action[:7])
-        env._robot_r.command_joint_state_gripper(action[7:])
+    if arms == "right":
+        env._robot_l.command_joint_state_gripper(action[7:])   # 任务夹爪
+    elif arms == "left":
+        env._robot_r.command_joint_state_gripper(action[:7])   # 左夹爪
     else:
-        env.step_gripper(action)
+        env._robot_l.command_joint_state_gripper(action[7:])   # 任务夹爪
+        env._robot_r.command_joint_state_gripper(action[:7])   # 未用夹爪
 
 
 # 模式 -> 模型映射（微调产物暂时占位；也可用 --checkpoint 覆盖）

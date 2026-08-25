@@ -121,12 +121,13 @@ openpi-main/records/<模型名>/<mode>/
 - **工控机底层契约（2026-08-26 对方确认，勿回改）**：
   * `DobotRobot.command_joint_state` 收**度数**（内部不再 rad2deg）；
   * `DobotRobot.get_joint_state` 仍返回**弧度**；
-  * `RealEnv.step_gripper` 的 `both` 分支左右切片已按对方（右臂在前）
-    布局互换。
+  * **夹爪物理交叉（实测确认）**：`_robot_l`(192.168.5.1) 的夹爪对象驱动
+    【任务】夹爪，`_robot_r`(192.168.5.2) 的夹爪对象驱动【未用】夹爪；
+    方向与归一化一致（move(255)=开、move(0)=关，即 1=开、0=关）。
   bench 适配：内部/安全检查/位姿对比全部保持**弧度**，仅在发送边界用
-  `rad_to_deg` 转度数（夹爪 0~1 不变）；双臂时用 `send_gripper` 直接按
-  本 bench 左臂在前布局调用两台机器人的夹爪，绕过上游互换分支。
-  单臂（默认 right）不受 step_gripper 互换影响。
+  `rad_to_deg` 转度数（夹爪 0~1 不变）；夹爪用 `send_gripper` 按交叉路由
+  发送（任务夹爪值 action[13] → `_robot_l` 经 [7:]，未用夹爪值 action[6]
+  → `_robot_r` 经 [:7]），不依赖上游 `RealEnv.step_gripper` 的分支。
 - **2026-08-25 修复（必须同步更新）**：
   * 根因：`rtc_embed_suffix` / `pir2_embed_suffix` 给 adaRMS 传了
     `(B,H,D)` 逐位置 cond，而 RMSNorm 只支持 `(B,D)` 逐样本，广播成 4 维后
