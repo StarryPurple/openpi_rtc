@@ -100,10 +100,11 @@ def rtc_embed_suffix(model, observation, x_t: jax.Array, timestep: jax.Array):
     if not getattr(model, "pi05", True):
         raise NotImplementedError("train-RTC currently requires pi05 models")
 
-    from openpi.models.pi0 import posemb_sincos
-
     action_tokens = model.action_in_proj(x_t)
-    time_emb = posemb_sincos(
+    # _posemb_sincos_batch with a (B,) timestep is numerically identical to
+    # pi0's posemb_sincos; defined locally so we do not depend on the exact
+    # openpi variant installed on the robot PC.
+    time_emb = _posemb_sincos_batch(
         timestep,
         model.action_in_proj.out_features,
         min_period=4e-3,
@@ -222,6 +223,7 @@ def train_rtc_sample_actions(
     noise=None,
     prev_chunk_left_over=None,
     inference_delay: int | None = None,
+    execution_horizon: int | None = None,
 ):
     """``Pi0.sample_actions`` with train-RTC hard prefix clamping.
 
@@ -229,7 +231,9 @@ def train_rtc_sample_actions(
     (same convention as the guidance path): its first ``inference_delay``
     positions are the in-flight actions and are clamped into the new chunk at
     every denoising step, with time fixed at 0 (clean). With no prefix this is
-    numerically identical to the original sampler.
+    numerically identical to the original sampler. ``execution_horizon`` is
+    accepted for interface compatibility with the bench (not used by the
+    hard-clamp sampler).
     """
     from openpi.models import model as _model
     from openpi.models.pi0 import make_attn_mask

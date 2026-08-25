@@ -395,6 +395,7 @@ def pir2_sample_actions(
     noise=None,
     prev_chunk_left_over=None,
     inference_delay: int | None = None,
+    execution_horizon: int | None = None,
 ):
     from openpi.models import model as _model
     from openpi.models.pi0 import make_attn_mask
