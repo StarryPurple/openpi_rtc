@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import os
 import pathlib
+import shutil
 import sys
 from typing import Any
 
@@ -87,16 +88,22 @@ def _posemb_sincos_batch(
 
 
 def rtc_embed_suffix(model, observation, x_t: jax.Array, timestep: jax.Array):
-    """Per-position-time suffix embedder, matching ``Pi0.embed_suffix`` (pi05).
+    """pi05 suffix embedder with per-sample time, identical to ``Pi0.embed_suffix``.
 
-    ``timestep`` has shape ``(*batch, H)`` (one noise level per action
-    position). Returns the same tuple as ``Pi0.embed_suffix``.
+    ``timestep`` has shape ``(*batch,)`` (one shared noise level per sample),
+    exactly like the base policy. RTC's in-flight prefix is handled by clamping
+    ``x_t`` and masking the loss — the model conditioning stays the base
+    per-sample adaRMS contract (``adarms_cond`` is ``(B, D)``), so the suffix
+    path produces the same shapes as the original sampler. Returns the same
+    tuple as ``Pi0.embed_suffix``.
     """
     if not getattr(model, "pi05", True):
         raise NotImplementedError("train-RTC currently requires pi05 models")
 
+    from openpi.models.pi0 import posemb_sincos
+
     action_tokens = model.action_in_proj(x_t)
-    time_emb = _posemb_sincos_batch(
+    time_emb = posemb_sincos(
         timestep,
         model.action_in_proj.out_features,
         min_period=4e-3,
@@ -106,6 +113,7 @@ def rtc_embed_suffix(model, observation, x_t: jax.Array, timestep: jax.Array):
     time_emb = nnx.swish(time_emb)
     time_emb = model.time_mlp_out(time_emb)
     time_emb = nnx.swish(time_emb)
+    adarms_cond = time_emb  # (B, D) per-sample, same contract as RMSNorm expects
 
     input_mask = jnp.ones(action_tokens.shape[:2], dtype=jnp.bool_)
     ar_mask = jnp.concatenate(
@@ -114,7 +122,7 @@ def rtc_embed_suffix(model, observation, x_t: jax.Array, timestep: jax.Array):
             jnp.zeros(model.action_horizon - 1, dtype=jnp.bool_),
         ]
     )
-    return action_tokens, input_mask, ar_mask, time_emb
+    return action_tokens, input_mask, ar_mask, adarms_cond
 
 
 # ---------------------------------------------------------------------------
@@ -178,7 +186,7 @@ def rtc_compute_loss(
 
     prefix_tokens, prefix_mask, prefix_ar_mask = model.embed_prefix(observation)
     suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = rtc_embed_suffix(
-        model, observation, x_t, time_pos
+        model, observation, x_t, time
     )
     input_mask = jnp.concatenate([prefix_mask, suffix_mask], axis=1)
     ar_mask = jnp.concatenate([prefix_ar_mask, suffix_ar_mask], axis=0)
@@ -260,13 +268,11 @@ def train_rtc_sample_actions(
 
     def step(carry):
         x_t, time = carry
-        time_pos = jnp.broadcast_to(time, (batch_size, self.action_horizon))
         if prefix is not None:
             mask = jnp.arange(self.action_horizon)[None, :] < delay
             x_t = jnp.where(mask[..., None], prefix, x_t)
-            time_pos = jnp.where(mask, 0.0, time_pos)
         suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = rtc_embed_suffix(
-            self, observation, x_t, time_pos
+            self, observation, x_t, jnp.broadcast_to(time, batch_size)
         )
         suffix_attn_mask = make_attn_mask(suffix_mask, suffix_ar_mask)
         prefix_attn_mask_2 = einops.repeat(
@@ -413,9 +419,14 @@ def ensure_dataset_and_norm_stats(
             "ERROR: 需要原始 HDF5 目录: 传 --raw-dir 或设 OPENPI05_RAW_TRAIN_DIR"
         )
     dataset_dir = HF_LEROBOT_HOME / repo_id
-    if dataset_dir.exists():
+    dataset_valid = (dataset_dir / "meta" / "info.json").exists()
+    if dataset_valid:
         print(f"dataset {repo_id} already exists; skipping convert.")
     else:
+        if dataset_dir.exists():
+            print(f"dataset {repo_id} exists but is incomplete; rebuilding.")
+            if not dry_run:
+                shutil.rmtree(dataset_dir)
         _run_command(
             [
                 "uv", "run",
@@ -423,6 +434,7 @@ def ensure_dataset_and_norm_stats(
                 "--raw-dir", raw_dir,
                 "--repo-id", repo_id,
                 "--task", prompt,
+                "--mode", "video",
             ],
             "convert raw hdf5 -> lerobot",
             dry_run,
@@ -497,26 +509,30 @@ def main() -> int:
 
     patch_pi0_for_train_rtc(args.simulated_delay)
 
-    argv = [
-        "train.py",
-        args.config,
-        "--exp_name", args.exp_name,
-        "--batch_size", str(args.batch_size),
-        "--num_train_steps", str(args.num_train_steps),
-        "--num_workers", str(args.num_workers),
-        "--save_interval", str(args.save_interval),
-        "--keep_period", str(args.keep_period),
-        "--weight_loader.checkpoint_path", args.checkpoint,
-        "--wandb_enabled", "true" if args.wandb_enabled else "false",
-    ]
-    if args.fsdp_devices is not None:
-        argv += ["--fsdp_devices", str(args.fsdp_devices)]
-    sys.argv = argv
-
+    # Build the TrainConfig by hand: get_config() does not apply tyro CLI
+    # overrides, and the old ``--weight_loader.checkpoint_path`` argv did not
+    # match the loader's actual field name (``params_path``).
+    import dataclasses
     from openpi.training import config as _config
+    from openpi.training import weight_loaders as _weight_loaders
     from scripts import train as _train
 
-    _train.main(_config.cli())
+    cfg = _config.get_config(args.config)
+    cfg = dataclasses.replace(
+        cfg,
+        exp_name=args.exp_name,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        num_train_steps=args.num_train_steps,
+        save_interval=args.save_interval,
+        keep_period=args.keep_period,
+        wandb_enabled=args.wandb_enabled,
+        weight_loader=_weight_loaders.CheckpointWeightLoader(
+            os.path.join(args.checkpoint, "params")),
+    )
+    if args.fsdp_devices is not None:
+        cfg = dataclasses.replace(cfg, fsdp_devices=args.fsdp_devices)
+    _train.main(cfg)
     return 0
 
 
