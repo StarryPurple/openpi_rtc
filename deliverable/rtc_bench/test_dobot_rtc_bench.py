@@ -817,9 +817,11 @@ class BenchRunner:
                                    "env_step_ms", "record_ms", "loop_total_ms",
                                    "sleep_ms", "action_delta_max_rad", "action_idx",
                                    "act_l0", "act_l1", "act_l2", "act_l3", "act_l4", "act_l5",
-                                   "act_r0", "act_r1", "act_r2", "act_r3", "act_r4", "act_r5",
-                                   "qpos_l0", "qpos_l1", "qpos_l2", "qpos_l3", "qpos_l4", "qpos_l5",
-                                   "qpos_r0", "qpos_r1", "qpos_r2", "qpos_r3", "qpos_r4", "qpos_r5"])
+                                   "act_l6", "act_r0", "act_r1", "act_r2", "act_r3", "act_r4",
+                                   "act_r5", "act_r6",
+                                   "qpos_l0", "qpos_l1", "qpos_l2", "qpos_l3", "qpos_l4",
+                                   "qpos_l5", "qpos_l6", "qpos_r0", "qpos_r1", "qpos_r2",
+                                   "qpos_r3", "qpos_r4", "qpos_r5", "qpos_r6"])
             self._infer_f = open(recorder.ep_dir / "infer.csv", "w", newline="")
             self._infer_w = csv.writer(self._infer_f)
             self._infer_w.writerow(["t_mono", "infer_ms", "d", "prev_len",
@@ -963,9 +965,13 @@ class BenchRunner:
                         round(max(0.0, rem * 1000.0), 2), round(action_delta_max_rad, 4),
                         actions_sent,
                         *[round(float(v), 4) for v in action[:6]],
+                        round(float(action[6]), 4),
                         *[round(float(v), 4) for v in action[7:13]],
+                        round(float(action[13]), 4),
                         *[round(float(v), 4) for v in cur_qpos[:6]],
+                        round(float(cur_qpos[6]), 4),
                         *[round(float(v), 4) for v in cur_qpos[7:13]],
+                        round(float(cur_qpos[13]), 4),
                     ])
                     if tick_delta_ms > 120:
                         print(
