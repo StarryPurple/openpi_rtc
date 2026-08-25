@@ -69,6 +69,12 @@ mv <deliverable>/rtc_bench openpi-main/rtc_bench
 ```bash
 cd openpi-main
 
+# 0.5) πR² 模式前置：给 openpi-main 的 gemma 打逐位置 adaRMS 补丁（仅 pir2 需要）
+#       train_rtc / rtc / baseline 不需要。补丁向后兼容（2 维 cond 路径不变）。
+patch -p1 < rtc_bench/gemma_adarms_3d.patch
+#       若上下文对不上，手动改 openpi-main/src/openpi/models/gemma.py：
+#       RMSNorm 的 adaptive 分支加 `if cond.ndim == 2: ... else: ...`（见补丁）
+
 # 0) 自检：确认复用 openpi-main 的 src/openpi（而不是残留的 rtc_bench/openpi）
 python -c "import openpi; print(openpi.__file__)"   # 应显示 .../openpi-main/src/openpi/__init__.py
 
@@ -82,9 +88,15 @@ python rtc_bench/test_dobot_rtc_bench.py --mode baseline --episodes 5
 # 3) train-free RTC（同一个 49999，推理时引导；d 自动估计）
 python rtc_bench/test_dobot_rtc_bench.py --mode rtc --episodes 5
 
-# 4) 微调产物（训练后再跑；--checkpoint 可覆盖路径）
+# 4) 微调产物（**必须用修复后代码重训**，见下方修复记录；--checkpoint 覆盖路径）
+#    train-RTC 微调产物：
 python rtc_bench/test_dobot_rtc_bench.py --mode train_rtc --episodes 5 [--checkpoint <路径>]
+#    πR² 微调产物（需要已打 gemma 补丁）：
 python rtc_bench/test_dobot_rtc_bench.py --mode pir2 --episodes 5 [--num-steps 10]
+python rtc_bench/test_dobot_rtc_bench.py --mode pir2 --slow-channel --episodes 5
+    # πR² 慢通道 + 单步流（论文 fast mode）：前缀 KV 异步缓存，每
+    # --slow-refresh-every(默认5) tick 刷新；每次调用只跑一步 DiT，
+    # 释放 d 个干净动作；warmup 按一步 DiT 延迟重新测 d（<=8 训练预算）
 ```
 
 常用参数：`--episodes`、`--inference-delay`（固定 d，默认自动）、`--execution-horizon`、
@@ -103,11 +115,50 @@ openpi-main/records/<模型名>/<mode>/
 
 ## 注意事项
 
-- 脚本强制使用 `rtc_bench/openpi`（vendored，含 task 注册），不碰 openpi-main 的
-  `src/openpi`；启动自检 `import openpi` 路径不对会直接报错。
+- 脚本复用 openpi-main 的 `src/openpi`，并把 yulong/light/entong 的
+  TrainConfig 注入 openpi 的 config 注册表（不改 openpi-main 文件）；
+  启动自检 `import openpi` 路径不对会直接报错。
+- **2026-08-25 修复（必须同步更新）**：
+  * 根因：`rtc_embed_suffix` / `pir2_embed_suffix` 给 adaRMS 传了
+    `(B,H,D)` 逐位置 cond，而 RMSNorm 只支持 `(B,D)` 逐样本，广播成 4 维后
+    Attention 的 `q_einsum("BTD,...")` 报
+    "Einstein sum subscript 'BTD' does not contain the correct number of
+    indices"（train_rtc 工控机实测报错）。训练同样会炸。
+  * rtc_train：`rtc_embed_suffix` 已改回逐样本 `(B,D)` cond（Kinetix 语义：
+    前缀靠 x_t 钳制 + loss mask），train_rtc 模式不需要 gemma 补丁。
+  * pir2：逐位置阶梯时间确实需要，故给 gemma 的 RMSNorm 增加 3 维 cond
+    支持（本包 `gemma_adarms_3d.patch`，2 维路径不变），并更新
+    `Module.__call__` 注解。pir2 模式必须打补丁。
+  * 两个采样器补上 `execution_horizon` 参数（bench 会传，旧版会 TypeError）。
+  * **旧训练产物作废**：修复改变了训练计算，rtc_train / pir2 必须用
+    训练机上的新代码（train_code.tar.gz 含新 rtc_train.py / pir2_train.py /
+    gemma.py）重新训练，再回传工控机。
 - 安全层默认开（有限值/J3/单步 0.9 rad/FK 工作区），`--robot-type` 必须与实机一致。
 - 每集运行中按 **回车** 可提前结束本集（`ended_by="manual"`），否则 30s 超时；
 - episode 之间默认人工复位场景（回车继续）；`--auto-reset` 会自行回位（仍建议人守急停）。
 - 首次实机先 `--episodes 1`，人守急停。
 - probe 的 d 是 p95+1 裕量；train-RTC 需 `d <= simulated_delay-1`，πR² 需 `d <= max_delay`
   （训练默认 8，覆盖 d≤7 / d≤8）。实机 run 模式 d 由实测延迟窗口自动估计。
+
+## 四 mode 全量验证流程（目标：全部跑通）
+
+```bash
+cd openpi-main
+
+# ① baseline（49999 原样，先验证控制链路/相机/录像/安全）
+python rtc_bench/test_dobot_rtc_bench.py --mode baseline --episodes 3
+
+# ② train-free RTC（同一 49999，推理时引导）
+python rtc_bench/test_dobot_rtc_bench.py --mode rtc --episodes 3
+
+# ③ train-RTC（重训产物；训练机 rtc_train_d7 回传后）
+python rtc_bench/test_dobot_rtc_bench.py --mode train_rtc --episodes 3 \
+  --checkpoint checkpoints/dobot/pi05-task_00031_entong-xtrainer/rtc_train_d7/<step>
+
+# ④ πR²（重训产物 + 已打 gemma 补丁）
+python rtc_bench/test_dobot_rtc_bench.py --mode pir2 --episodes 3 \
+  --checkpoint checkpoints/dobot/pi05-task_00031_entong-xtrainer/pir2_v2/<step>
+```
+
+产物都在 `records/<模型名>/<mode>/episode_N/`；每个 mode 跑完核对
+`episode_N.json` 的 ended_by（home/timeout/manual）和动作统计。
