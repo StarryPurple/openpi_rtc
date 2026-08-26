@@ -65,6 +65,13 @@ class ActionQueue:
                 return None
             return self.original_queue[self.last_index :].copy()
 
+    def get_left_over_processed(self) -> np.ndarray | None:
+        """Unconsumed processed (robot-unit) actions of the current chunk."""
+        with self.lock:
+            if self.queue is None:
+                return None
+            return self.queue[self.last_index :].copy()
+
     def merge(
         self,
         original_actions: np.ndarray,
@@ -97,4 +104,29 @@ class ActionQueue:
                 [self.queue, np.asarray(processed_actions, dtype=np.float32)]
             )
             self.queue = self.queue[self.last_index :]
+            self.last_index = 0
+
+    def append(
+        self,
+        original_actions: np.ndarray,
+        processed_actions: np.ndarray,
+    ) -> None:
+        """Append new actions to the unconsumed tail (πR² single-step stream).
+
+        Unlike ``merge`` (which replaces for RTC), stream calls emit only the
+        ``d`` freshly-denoised actions per call; they extend the queue so the
+        executed trajectory is continuous and never hits a repeat plateau.
+        """
+        with self.lock:
+            orig = np.asarray(original_actions, dtype=np.float32)
+            proc = np.asarray(processed_actions, dtype=np.float32)
+            if self.original_queue is None:
+                self.original_queue = orig
+                self.queue = proc
+                self.last_index = 0
+                return
+            self.original_queue = np.concatenate(
+                [self.original_queue[self.last_index :], orig], axis=0
+            )
+            self.queue = np.concatenate([self.queue[self.last_index :], proc], axis=0)
             self.last_index = 0

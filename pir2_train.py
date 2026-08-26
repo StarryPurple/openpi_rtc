@@ -773,7 +773,7 @@ def wrap_policy_for_pir2(
     def warm_start(obs, *, d: int | None = None, num_steps: int | None = None):
         """Standard-flow warm start of the stream buffer (paper Sec. 3.3)."""
         d = int(d if d is not None else wrapped._default_delay)
-        d = max(1, min(d, model.action_horizon // 3))
+        d = max(2, min(d, model.action_horizon // 3))
         num_steps = int(num_steps or wrapped._num_steps)
         inputs, _, observation = _transform_inputs(obs)
         wrapped._slow_rng, rng = jax.random.split(wrapped._slow_rng)
@@ -810,7 +810,7 @@ def wrap_policy_for_pir2(
         and the model-space raw chunk.
         """
         d = int(inference_delay if inference_delay is not None else wrapped._default_delay)
-        d = max(1, min(d, model.action_horizon // 3))
+        d = max(2, min(d, model.action_horizon // 3))
         if warm or wrapped._slow.get("x_t") is None:
             refresh_slow(obs)
             chunk = warm_start(obs, d=d)
@@ -881,16 +881,18 @@ def wrap_policy_for_pir2(
             [emitted, np.repeat(emitted[-1:], model.action_horizon - d, axis=0)],
             axis=0,
         )
-        chunk = wrapped._slow["in_flight"].copy()
-        wrapped._last_raw_chunk = chunk
+        # 只返回 d 个新动作（robot units + model space），由 bench 追加进
+        # 队列；in_flight 仍是完整 H 缓冲，供下一步 inpaint 使用。
         outputs = {
             "state": inputs["state"],
-            "actions": chunk[None, ...],  # (1, H, A): output transform is batched
+            "actions": emitted[None, ...],  # (1, d, A)
         }
         outputs = wrapped._output_transform(outputs)
+        new_actions = np.asarray(outputs["actions"], dtype=np.float32)[0]  # (d, A')
+        wrapped._last_raw_chunk = emitted
         return {
-            "actions": np.asarray(outputs["actions"], dtype=np.float32)[0],
-            "raw_actions": chunk,
+            "actions": new_actions,
+            "raw_actions": emitted,
             "inference_delay": d,
             "slow_age": age,
             "warm": False,

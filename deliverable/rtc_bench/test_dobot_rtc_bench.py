@@ -480,14 +480,16 @@ class BenchRunner:
     def _inference_worker(self) -> None:
         while not self._stop.is_set():
             if self.stream:
-                # 单步流：队列剩到“在飞窗口”边界（H-d）时推进一次。
+                # 单步流：每调用只产出 d 个新动作，追加进队列（不是整块
+                # 替换）；队列剩到 d 拍时触发下一次推理。d 必须 >= 2，
+                # 否则产出速率 < 执行速率（25 拍/s），队列会饿死。
                 d = self._delay_ticks()
                 H = self.policy._model.action_horizon
-                d = max(1, min(d, H // 3))  # 与 wrapper/staircase 的 clamp 一致
+                d = max(2, min(d, H // 3))  # 与 wrapper/staircase 的 clamp 一致
                 drain = self._stream_drain_ticks
                 if drain is None:
                     drain = 1
-                trigger = max(1, H - d + drain)
+                trigger = max(1, d)
                 if self.queue.qsize() > trigger:
                     time.sleep(PERIOD / 4)
                     continue
@@ -503,9 +505,11 @@ class BenchRunner:
                 self._latency_ms.append(infer_ms)
                 actions = np.asarray(out["actions"], dtype=np.float32)
                 raw = np.asarray(out["raw_actions"], dtype=np.float32)
-                # 流模式连续：不做 Hermite 桥/引导（缓冲本身就是连续计划），
-                # 直接替换队尾，避免桥接逻辑与流缓冲冲突。
-                self.queue.merge(raw, actions, 0)
+                # warm 返回完整热启动块 -> 替换；之后每次只追加 d 个新动作。
+                if out.get("warm", False):
+                    self.queue.merge(raw, actions, 0)
+                else:
+                    self.queue.append(raw, actions)
                 if self.debug:
                     self._infer_w.writerow([
                         round(t0, 6), round(infer_ms, 2), d, H,
@@ -766,7 +770,7 @@ class BenchRunner:
         d_final = (
             self.args.inference_delay
             if self.args.inference_delay
-            else min(16, max(1, math.ceil(float(np.mean(lat)) / TICK_MS)))
+            else min(16, max(2, math.ceil(float(np.mean(lat)) / TICK_MS)))
         )
         if d_final != d0:
             # 用最终 d 重编译（d 是 jit static 参数，不能运行时变）
