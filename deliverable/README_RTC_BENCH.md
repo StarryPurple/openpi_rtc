@@ -115,9 +115,11 @@ openpi-main/records/<模型名>/<mode>/
 - **工控机底层契约（2026-08-26 对方确认，勿回改）**：
   * `DobotRobot.command_joint_state` 收**度数**（内部不再 rad2deg）；
   * `DobotRobot.get_joint_state` 仍返回**弧度**；
-  * **夹爪物理交叉（实测确认）**：`_robot_l`(192.168.5.1) 的夹爪对象驱动
-    【任务】夹爪，`_robot_r`(192.168.5.2) 的夹爪对象驱动【未用】夹爪；
-    方向与归一化一致（move(255)=开、move(0)=关，即 1=开、0=关）。
+  * **夹爪物理映射（2026-08-26 二次实测，曾对调过）**：当前
+    `_robot_r`(192.168.5.2) 的夹爪对象驱动【任务】夹爪，
+    `_robot_l`(192.168.5.1) 的夹爪对象驱动【未用】夹爪（直连）；方向与
+    归一化一致（move(255)=开、move(0)=关，即 1=开、0=关）。若日后夹爪
+    又被对调，用 gripper_test.py 重测并按结果改 send_gripper 路由。
   * **不修改 openpi-main 任何文件**：pir2 的逐位置时间通过 action tokens
     注入，adarms_cond 保持逐样本 (B,D)（与 rtc_train 相同契约），gemma
     无需补丁。
