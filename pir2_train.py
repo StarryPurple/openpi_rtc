@@ -740,17 +740,24 @@ def wrap_policy_for_pir2(
     wrapped._num_steps = int(num_steps)
 
     def _transform_inputs(obs):
-        """Apply the policy's input transforms (normalize/pad/tokenize)."""
+        """Mimic Policy.infer exactly: input transforms -> batch -> Observation
+        -> preprocess. Returns (inputs, preprocessed, observation) where
+        ``observation`` is the pre-preprocess Observation the sampler expects
+        (it preprocesses internally), and ``preprocessed.state`` is (1, S=32)
+        for the fast-channel state_proj (Linear(action_dim)).
+        """
         import openpi.models.model as _model
 
         inputs = wrapped._input_transform({k: v for k, v in obs.items()})
+        inputs = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inputs)
         observation = _model.Observation.from_dict(inputs)
-        return inputs, _model.preprocess_observation(None, observation, train=False)
+        preprocessed = _model.preprocess_observation(None, observation, train=False)
+        return inputs, preprocessed, observation
 
     def refresh_slow(obs):
         """Recompute the cached slow-channel prefix from the latest obs."""
-        inputs, observation = _transform_inputs(obs)
-        kv_cache, prefix_mask = wrapped._jit_refresh(observation)
+        inputs, preprocessed, _ = _transform_inputs(obs)
+        kv_cache, prefix_mask = wrapped._jit_refresh(preprocessed)
         wrapped._slow["kv_cache"] = kv_cache
         wrapped._slow["prefix_len"] = int(
             np.asarray(prefix_mask).sum(axis=-1).max()
@@ -768,7 +775,7 @@ def wrap_policy_for_pir2(
         d = int(d if d is not None else wrapped._default_delay)
         d = max(1, min(d, model.action_horizon // 3))
         num_steps = int(num_steps or wrapped._num_steps)
-        inputs, observation = _transform_inputs(obs)
+        inputs, _, observation = _transform_inputs(obs)
         wrapped._slow_rng, rng = jax.random.split(wrapped._slow_rng)
         out = wrapped._sample_actions(
             rng, observation, num_steps=num_steps, inference_delay=0
@@ -842,8 +849,8 @@ def wrap_policy_for_pir2(
             wrapped._slow["time"] = t_new
             wrapped._slow["last_d"] = d
 
-        inputs, _ = _transform_inputs(obs)
-        state = np.asarray(inputs["state"], dtype=np.float32)[None, :]
+        inputs, preprocessed, _ = _transform_inputs(obs)
+        state = np.asarray(preprocessed.state, dtype=np.float32)  # (1, S=32)
         x_t = np.asarray(wrapped._slow["x_t"], dtype=np.float32)[None, ...]
         time_pos = np.asarray(wrapped._slow["time"], dtype=np.float32)[None, :]
         in_flight = np.asarray(wrapped._slow["in_flight"], dtype=np.float32)[None, ...]
