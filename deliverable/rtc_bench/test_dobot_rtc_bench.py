@@ -202,13 +202,13 @@ MODELS: dict[str, dict] = {
     },
     "train_rtc": {
         "checkpoint": OPENPI_MAIN
-        / "checkpoints/dobot/pi05-task_00031_entong-xtrainer/rtc_train_d7/49999",
+        / "checkpoints/dobot/pi05-task_00031_entong-xtrainer/rtc_train_d7/9999",
         "config": "pi05-task_00031_entong-xtrainer",
         "wrapper": "train_rtc",
     },
     "pir2": {
         "checkpoint": OPENPI_MAIN
-        / "checkpoints/dobot/pi05-task_00031_entong-xtrainer/pir2_v2/49999",
+        / "checkpoints/dobot/pi05-task_00031_entong-xtrainer/pir2_v2/9999",
         "config": "pi05-task_00031_entong-xtrainer",
         "wrapper": "pir2",
     },
