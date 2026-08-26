@@ -109,6 +109,28 @@ if _rtc_missing:
         "并删除 rtc_bench/openpi_rtc/__pycache__ 后重跑。"
     )
 
+
+def _fix_gripper_ids() -> None:
+    """按端口修正夹爪伺服 ID（实测，2026-08-26 串口扫描）。
+
+    硬件实测：/dev/ttyUSB0 上只有伺服 ID 21（任务夹爪），/dev/ttyUSB1 上
+    只有 ID 22（未用夹爪）。openpi-main 的 dobot.py 当前 id_list 被改为
+    {192.168.5.1: 22, .2: 21}，会导致 ping/set_torque_limit 失败。这里在
+    运行时按端口校正 ID（幂等：即使对方改回正确值也不影响），不修改
+    openpi-main 任何文件。
+    """
+    from examples.xtrainer_real.gripper.dobot_gripper import DobotGripper
+
+    _PORT_TO_ID = {"/dev/ttyUSB0": 21, "/dev/ttyUSB1": 22}
+    _orig_init = DobotGripper.__init__
+
+    def _fixed_init(self, port, id_name, servo_pos):
+        id_name = _PORT_TO_ID.get(port, id_name)
+        return _orig_init(self, port, id_name, servo_pos)
+
+    DobotGripper.__init__ = _fixed_init
+
+
 PROMPT = "Transfer the test tube from the right rack to the left rack."
 CONTROL_HZ = 25.0
 PERIOD = 1.0 / CONTROL_HZ
@@ -363,6 +385,7 @@ def build_policy(spec: dict, args: argparse.Namespace):
 def make_env(args: argparse.Namespace):
     from examples.xtrainer_real.real_env import RealEnv
 
+    _fix_gripper_ids()
     reset_position = [-1.5707964, 0.5235988, -1.9198622, 0.34906584, 1.5707964, 1.5707964]
     return RealEnv(False, arms=args.arms, reset_position=reset_position)
 
