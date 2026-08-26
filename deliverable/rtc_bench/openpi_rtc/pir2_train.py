@@ -815,10 +815,13 @@ def wrap_policy_for_pir2(
             refresh_slow(obs)
             chunk = warm_start(obs, d=d)
             wrapped._last_raw_chunk = chunk
-            outputs = {"state": wrapped._slow["cache_inputs"]["state"], "actions": chunk}
+            outputs = {
+                "state": wrapped._slow["cache_inputs"]["state"],
+                "actions": chunk[None, ...],  # (1, H, A): output transform is batched
+            }
             outputs = wrapped._output_transform(outputs)
             return {
-                "actions": np.asarray(outputs["actions"], dtype=np.float32),
+                "actions": np.asarray(outputs["actions"], dtype=np.float32)[0],
                 "raw_actions": chunk,
                 "inference_delay": d,
                 "slow_age": 0,
@@ -880,10 +883,13 @@ def wrap_policy_for_pir2(
         )
         chunk = wrapped._slow["in_flight"].copy()
         wrapped._last_raw_chunk = chunk
-        outputs = {"state": inputs["state"], "actions": chunk}
+        outputs = {
+            "state": inputs["state"],
+            "actions": chunk[None, ...],  # (1, H, A): output transform is batched
+        }
         outputs = wrapped._output_transform(outputs)
         return {
-            "actions": np.asarray(outputs["actions"], dtype=np.float32),
+            "actions": np.asarray(outputs["actions"], dtype=np.float32)[0],
             "raw_actions": chunk,
             "inference_delay": d,
             "slow_age": age,
