@@ -881,6 +881,11 @@ class BenchRunner:
                 t0 = time.perf_counter()
                 queue_size_before = self.queue.qsize()
                 action = self.queue.get()
+                if action is not None:
+                    # 统一裁到 14 维（12 关节 + 2 夹爪，左臂在前）：模型输出
+                    # 可能带 32 维 padding（慢通道流路径），后续安全检查、
+                    # rad_to_deg、send_gripper、位姿插值都按 14 维契约工作。
+                    action = np.asarray(action, dtype=np.float32)[:14]
                 action_delta_max_rad = 0.0
                 env_ms = rec_ms = 0.0
                 if action is not None:
