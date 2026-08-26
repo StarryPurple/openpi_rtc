@@ -782,7 +782,7 @@ def wrap_policy_for_pir2(
         )
         chunk = np.asarray(out[0])  # (H, A) model space
         H, A = chunk.shape
-        t = np.asarray(staircase_time(d, H), dtype=np.float32)
+        t = np.asarray(staircase_time(d, H), dtype=np.float32).copy()
         eps = np.random.default_rng(0).standard_normal((H, A)).astype(np.float32)
         x_t = (t[:, None] * eps + (1.0 - t[:, None]) * chunk).astype(np.float32)
         x_t[:d] = chunk[:d]
@@ -838,7 +838,9 @@ def wrap_policy_for_pir2(
             # (paper: schedule adapts when d changes between calls).
             wrapped._slow_rng, rng = jax.random.split(wrapped._slow_rng)
             x_cur = np.asarray(wrapped._slow["x_t"], dtype=np.float32)
-            t_new = np.asarray(staircase_time(d, model.action_horizon), dtype=np.float32)
+            t_new = np.asarray(
+                staircase_time(d, model.action_horizon), dtype=np.float32
+            ).copy()
             eps = np.asarray(jax.random.normal(
                 rng, (model.action_horizon, model.action_dim)
             ))
