@@ -20,6 +20,20 @@ TASK_IP = "192.168.5.2"    # 任务臂（bench 默认 arms=right 用的就是它
 OTHER_IP = "192.168.5.1"   # 另一臂
 
 
+def fix_gripper_ids() -> None:
+    """按端口修正夹爪伺服 ID（实测：ttyUSB0=21，ttyUSB1=22）。
+    与 rtc_bench/test_dobot_rtc_bench.py 的 _fix_gripper_ids 一致。"""
+    from examples.xtrainer_real.gripper.dobot_gripper import DobotGripper
+
+    _PORT_TO_ID = {"/dev/ttyUSB0": 21, "/dev/ttyUSB1": 22}
+    _orig = DobotGripper.__init__
+
+    def _fixed(self, port, id_name, servo_pos):
+        return _orig(self, port, _PORT_TO_ID.get(port, id_name), servo_pos)
+
+    DobotGripper.__init__ = _fixed
+
+
 def ask(prompt: str, choices: tuple[str, ...]) -> str:
     hint = "/".join(choices)
     while True:
@@ -52,6 +66,7 @@ def test(ip: str, label: str) -> None:
 def main() -> int:
     print("准备：确认机械臂周围没有障碍物，夹爪不会夹到东西。")
     input("按回车开始（会真实开关夹爪数次）...")
+    fix_gripper_ids()
     test(TASK_IP, "任务臂夹爪对象")
     test(OTHER_IP, "另一臂夹爪对象")
     print("\n完成。请把以上输出贴回开发。")
