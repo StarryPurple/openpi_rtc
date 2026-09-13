@@ -36,6 +36,9 @@ Notes:
       "<local_file>.bos-upload.json"; delete it (or pass --force) to restart.
     - After upload the object is verified: size and (if available) an md5 we
       attach as user metadata x-bce-meta-md5.
+    - For very large files (e.g. the 12GB checkpoint bundle) pass --super-file:
+      uses the BOS SDK's put_super_object_from_file (threaded super-file
+      upload, chunk aligned to 5MB; no resume manifest, a retry restarts).
 """
 
 from __future__ import annotations
@@ -206,13 +209,14 @@ def _load_manifest(client: BosClient, local: str, bucket: str, key: str,
     server_parts: dict[str, str] = {}
     try:
         for p in client.list_all_parts(bucket, key, upload_id):
-            server_parts[str(p.part_number)] = p.etag
+            server_parts[str(p.part_number)] = str(p.etag or "").strip().strip('"')
     except Exception as e:
         print(f"查询已有分片失败（{e}），重新开始")
         return None, {}
     if not server_parts:
         return None, {}
     print(f"恢复分片上传: upload_id={upload_id[:12]}…, 已上传 {len(server_parts)} 片")
+    _save_manifest(local, bucket, key, upload_id, size, md5_hex, server_parts)
     return upload_id, server_parts
 
 
@@ -292,17 +296,35 @@ def _upload_multipart(client: BosClient, bucket: str, key: str, local: str,
                 _save_manifest(local, bucket, key, upload_id, size, md5_hex, done_parts)
             progress.add(part_len, n)
 
+    # BOS 分片上传返回的 ETag 头带引号（S3 兼容格式），complete 请求体里
+    # 必须是不带引号的裸值，否则服务端报 "JSON ... not appropriate"。
+    def _clean_etag(etag) -> str:
+        e = str(etag or "").strip().strip('"')
+        if not e:
+            sys.exit("ERROR: 分片 eTag 为空，请加 --force 重新上传")
+        return e
+
     part_list = sorted(
-        ({"partNumber": int(n), "eTag": etag} for n, etag in done_parts.items()),
+        ({"partNumber": int(n), "eTag": _clean_etag(etag)}
+         for n, etag in done_parts.items()),
         key=lambda x: x["partNumber"],
     )
     if len(part_list) != total_parts:
         sys.exit(f"ERROR: 分片不齐 {len(part_list)}/{total_parts}，请重跑以断点续传")
 
     print("合并分片 (complete_multipart_upload) ...")
-    client.complete_multipart_upload(
-        bucket, key, upload_id, part_list, user_metadata={"md5": md5_hex}
-    )
+    print(f"  complete 请求: {len(part_list)} 片, "
+          f"eTag[0]={part_list[0]['eTag'][:16]}… "
+          f"eTag[-1]={part_list[-1]['eTag'][:16]}…")
+    try:
+        client.complete_multipart_upload(bucket, key, upload_id, part_list)
+    except Exception as e:
+        print("合并失败（服务端拒绝该分片列表）。")
+        print("  可能原因: 分片 eTag 与 upload_id 下实际存储的分片不一致，"
+              "或请求携带了该操作不接受的头部。")
+        print("  处理: 先原样重跑一次本命令（断点续传会直接重试合并，无需重传分片）；")
+        print("        若仍失败，请加 --force 重新上传，或加 --super-file 走 SDK 官方封装。")
+        raise
     _verify(client, bucket, key, size, md5_hex)
     try:
         os.remove(_manifest_path(local))
@@ -310,14 +332,45 @@ def _upload_multipart(client: BosClient, bucket: str, key: str, local: str,
         pass
 
 
+def _upload_super(client: BosClient, bucket: str, key: str, local: str,
+                  part_mb: int, workers: int) -> None:
+    """大文件走 BOS SDK 的 put_super_object_from_file（超级文件分片上传）。
+
+    官方推荐用于超大文件：SDK 内部并发分片（线程数 = workers），分片大小
+    自动对齐到 5MB 整数倍（BOS Superfile 要求）。无断点续传：中断后重跑
+    会 abort 旧任务并重新开始。
+    """
+    size = os.path.getsize(local)
+    md5_hex = md5_of_file(local)
+    chunk_mb = max(5, int(round(part_mb / 5) * 5))
+    part_size = chunk_mb * 1024 * 1024
+    total_parts = (size + part_size - 1) // part_size
+    if total_parts > MAX_PARTS:
+        sys.exit(f"ERROR: 分片数 {total_parts} 超过上限 {MAX_PARTS}，请调大 --part-mb")
+    print(f"超级文件上传 (put_super_object_from_file): {local} "
+          f"({human(size)}, {total_parts} 片 x {chunk_mb}MB, 线程 {workers}) "
+          f"-> {bucket}/{key}")
+    client.put_super_object_from_file(
+        bucket,
+        key,
+        local,
+        chunk_size=chunk_mb,
+        thread_num=workers,
+    )
+    print("上传完成，校验中 ...")
+    _verify(client, bucket, key, size, md5_hex)
+
+
 def upload(local: str, ref: str, part_mb: int, workers: int, force: bool,
-           bucket: str, endpoint: str) -> None:
+           bucket: str, endpoint: str, super_file: bool = False) -> None:
     if not os.path.isfile(local):
         sys.exit(f"ERROR: 文件不存在: {local}")
     bucket, key = parse_bos_ref(ref, bucket)
     client = make_client(endpoint)
     if os.path.getsize(local) <= SINGLE_PUT_LIMIT:
         _upload_single(client, bucket, key, local)
+    elif super_file:
+        _upload_super(client, bucket, key, local, part_mb, workers)
     else:
         _upload_multipart(client, bucket, key, local, part_mb, workers, force)
 
@@ -390,6 +443,9 @@ def main() -> None:
     p_up.add_argument("--part-mb", type=int, default=64, help="分片大小 MB（>=5，默认 64）")
     p_up.add_argument("--workers", type=int, default=4, help="并发分片数（默认 4）")
     p_up.add_argument("--force", action="store_true", help="放弃旧任务重新上传")
+    p_up.add_argument("--super-file", action="store_true",
+                      help="大文件用 SDK put_super_object_from_file 超级文件接口"
+                           "（多线程并发；无断点续传）")
     p_up.add_argument("--bucket", default=DEFAULT_BUCKET, help=f"桶名（默认 {DEFAULT_BUCKET}）")
     p_up.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
     p_up.set_defaults(func=upload)
@@ -412,7 +468,8 @@ def main() -> None:
     if args.command == "ls":
         args.func(args.ref, args.bucket, args.endpoint)
     elif args.command == "upload":
-        args.func(args.local, args.ref, args.part_mb, args.workers, args.force, args.bucket, args.endpoint)
+        args.func(args.local, args.ref, args.part_mb, args.workers, args.force,
+                  args.bucket, args.endpoint, args.super_file)
     elif args.command == "download":
         args.func(args.ref, args.local, args.bucket, args.endpoint)
     elif args.command == "rm":

@@ -65,6 +65,13 @@ class ActionQueue:
                 return None
             return self.original_queue[self.last_index :].copy()
 
+    def get_left_over_processed(self) -> np.ndarray | None:
+        """Unconsumed processed (robot-unit) actions of the current chunk."""
+        with self.lock:
+            if self.queue is None:
+                return None
+            return self.queue[self.last_index :].copy()
+
     def merge(
         self,
         original_actions: np.ndarray,

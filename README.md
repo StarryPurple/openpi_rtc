@@ -8,7 +8,7 @@ points at this repository root:
 | --- | --- | --- |
 | **inference-RTC** | yes | `eval_offline_rtc.py --mode rtc` / `run_robot.py --mode rtc` |
 | **train-RTC** | no (fine-tune from 49999) | `rtc_train.py` |
-| **πR² v1** | no (fine-tune from 49999) | `pir2_train.py` |
+| **πR² v2** | no (fine-tune from 49999) | `pir2_train.py` |
 
 ## Standalone layout (no parent repository)
 
@@ -197,7 +197,7 @@ LeRobot and norm stats computed automatically on a fresh machine
 
 ## πR² (`pir2_train.py`)
 
-v1 of arXiv:2607.26055 for the pi0.5 stack:
+v2 of arXiv:2607.26055 for the pi0.5 stack (paper's full reactive pipeline):
 
 - **staircase per-position noise schedule** (clean front d / ramp / noise tail
   d) as the training-time diffusion-forcing schedule; the deployment delay is
@@ -206,21 +206,36 @@ v1 of arXiv:2607.26055 for the pi0.5 stack:
 - **fast proprioception channel**: a continuous `state_proj` token in the
   suffix at every denoising step (new parameter, fine-tuned from 49999), since
   pi0.5 embeds state as discrete language tokens in the prefix (stale during
-  denoising).
-
-The slow channel (async vision/language KV reuse + learned delay embedding)
-is deployment wiring and is not implemented in v1; the prefix is recomputed
-per inference call.
+  denoising);
+- **slow channel (async vision/language)**: the prefix (images + prompt +
+  tokenized state) is cached as the LLM KV cache and refreshed every
+  `slow_refresh_every` ticks; training samples a per-sample image delay
+  `k ∈ [0, image_delay_max]` (the data pipeline feeds the stale frames) and
+  injects a learned, zero-initialized delay embedding into the action
+  expert's per-position AdaRMS conditioning (k=0 is exactly a no-op, so the
+  base-policy behaviour is preserved). Deviation from the paper: the embedding
+  lives on the fast side (per-call) rather than inside the cached prefix,
+  because a cached KV cannot carry a per-call delay;
+- **single-step streaming inference**: a persistent (H, A) noise buffer is
+  warm-started with standard flow inference (20% of training samples are
+  plain flow matching) and advanced by ONE Euler substep per call (paper
+  Fig. 2 / Eq. 4), releasing `d` clean actions and appending `d` fresh noise
+  slots each call; per-call cost is one NFE against the cached prefix +
+  fresh state, plus symmetric ±`time_jitter` on the staircase during training.
 
 ```bash
-uv run python pir2_train.py --exp-name pir2_v1 \
-  --max-delay 8 --num-train-steps 10000 --fsdp-devices 2 --dry-run
-uv run python pir2_train.py --exp-name pir2_v1 \
-  --max-delay 8 --num-train-steps 10000 --fsdp-devices 2
+uv run python pir2_train.py --exp-name pir2_v2 --max-delay 8 \
+  --image-delay-max 5 --slow-channel \
+  --num-train-steps 10000 --fsdp-devices 2 --dry-run
+uv run python pir2_train.py --exp-name pir2_v2 --max-delay 8 \
+  --image-delay-max 5 --slow-channel \
+  --num-train-steps 10000 --fsdp-devices 2
 ```
 
 Evaluate with `pir2_eval.py` (default `--inference-delay 7`,
-`--num-steps 10`; try `--num-steps 1` for the fast single-step mode).
+`--num-steps 10`; add `--slow-channel` for the single-step stream mode).
+On the robot PC: `--mode pir2 --slow-channel` (see
+`deliverable/rtc_bench/test_dobot_rtc_bench.py`).
 
 ## Transfer between machines (BOS for training, OBS for the robot PC)
 
@@ -321,7 +336,6 @@ uv run python tests/test_safety.py                # robot safety checks
   (Physical Intelligence). Our JAX version keeps Kinetix's full-Jacobian
   `jax.vjp` correction; lerobot's torch port computes only the identity part
   (see `rtc_processor.py` docstring).
-- πR²'s slow channel (async VLM + delay embedding) is the remaining extension.
 - `safety.py` pose protection needs the correct `--robot-type` (Nova 2 /
   Nova 5) for the working-zone FK to be valid.
 - The vendored `openpi/training/config.py` still contains a few hardcoded

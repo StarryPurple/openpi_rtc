@@ -11,14 +11,14 @@ Time convention (same as ``openpi.models.pi0.Pi0.sample_actions``):
 ``x_t += dt * v_t`` with ``dt = -1 / num_steps``, and the predicted clean
 chunk is ``x1 = x_t - time * v_t``.
 
-The correction term uses ``jax.vjp`` on ``x1(x_t)`` so that the *full*
-Jacobian ``d x1 / d x_t`` (including the velocity's own dependence on
-``x_t``) is applied, exactly like Kinetix. Note that lerobot's eager-torch
-port computes ``v_t`` *before* ``x.requires_grad_(True)``, which silently
-drops the ``dv/dx`` term and reduces the correction to the identity part;
-this implementation deliberately keeps the full Jacobian (the sign of the
-correction is chosen accordingly: ``v' = v - w * J^T err`` with
-``err = (prev - x1) * weights``).
+The correction term defaults to lerobot's *identity* Jacobian
+(``correction = err``): Kinetix's full ``jax.vjp`` form keeps the
+``dv/dx`` term, but on pi0/pi0.5 transformers that Jacobian has a large
+norm and the correction diverges / becomes ineffective in practice
+(observed: position 0 of the new chunk barely moves toward the target).
+The identity form directly applies the target at each position and is
+stable. Set ``RTCConfig.guidance_jacobian="full"`` to switch back to the
+Kinetix ``v' = v - w * J^T err`` form (``err = (prev - x1) * weights``).
 """
 
 from __future__ import annotations
@@ -96,10 +96,18 @@ class RTCProcessor:
             # Predicted clean chunk: x1 = z - time * v(z).
             return z - time * denoise_fn(z)
 
-        x1, f_vjp = jax.vjp(x1_fn, x)
+        x1 = x1_fn(x)
+        if self.rtc_config.guidance_jacobian == "full":
+            x1, f_vjp = jax.vjp(x1_fn, x)
         v_t = (x - x1) / time
         err = (prev - x1) * weights
-        correction = f_vjp(err)[0]
+        if self.rtc_config.guidance_jacobian == "identity":
+            # lerobot 量产版：x1 对 x 的导数只剩恒等项，correction=err。
+            # 完整 Jacobian 范数大，在 transformer 上容易发散/失效（实机观测
+            # 到位置 0 几乎不被拉动）；恒等版直接作用于目标位置，稳定且收敛。
+            correction = err
+        else:
+            correction = f_vjp(err)[0]
 
         tau = 1.0 - time  # paper's flow time: 0 -> 1 as the chunk cleans up
         guidance_weight = self._guidance_weight(tau, dtype=x.dtype)

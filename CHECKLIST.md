@@ -101,7 +101,7 @@ checkpoints/qb-ilm-ckpts/g100_pi/<config>/<exp_name>/<step>/
 ```bash
 --checkpoint "$OPENPI05_CHECKPOINT_49999"                          # baseline（--config pi05-task_00031_yulong-xtrainer）
 --checkpoint checkpoints/qb-ilm-ckpts/g100_pi/pi05-task_00031_entong-xtrainer/rtc_train_d7/49999   # train-RTC
---checkpoint checkpoints/qb-ilm-ckpts/g100_pi/pi05-task_00031_entong-xtrainer/pir2_v1/49999        # πR²
+--checkpoint checkpoints/qb-ilm-ckpts/g100_pi/pi05-task_00031_entong-xtrainer/pir2_v2/49999        # πR²
 ```
 
 拷贝到工控机/推理机时只带 `params/` + `assets/` 即可（train_state 可省）。

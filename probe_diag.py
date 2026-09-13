@@ -16,6 +16,7 @@ import datetime
 import importlib
 import inspect
 import json
+import numpy as np
 import os
 import pathlib
 import platform
@@ -78,7 +79,8 @@ def file_snapshot(path: pathlib.Path, max_lines: int = 400) -> None:
         "deg2rad", "rad2deg", "GetAngle", "ServoJ", "JointMovJ",
         "command_joint_state", "get_joint_state", "get_observations",
         "gripper", "step(", "step_gripper", "reset_position", "arms",
-        "def __init__", "class ",
+        "def __init__", "class ", "com_list", "servo_pos", "ttyUSB",
+        "DobotGripper", "EnableRobot", "SpeedFactor", "move(",
     )
     hits = [
         (i + 1, ln) for i, ln in enumerate(lines)
@@ -93,6 +95,21 @@ def file_snapshot(path: pathlib.Path, max_lines: int = 400) -> None:
         shown += 1
     if not hits:
         log("  （无单位/接口关键字命中）")
+
+
+def file_full(path: pathlib.Path) -> None:
+    """整文件 dump（用于小文件：夹爪驱动等）。"""
+    if not path.exists():
+        log(f"[缺失] {path}")
+        return
+    st = path.stat()
+    mtime = datetime.datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds")
+    log(f"[全文] {path}  mtime={mtime}  size={st.st_size}")
+    try:
+        for no, ln in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+            log(f"  L{no}: {ln}")
+    except Exception as e:  # noqa: BLE001
+        log(f"[读取失败] {e}")
 
 
 def probe_robot(root: pathlib.Path, move_test: bool, with_gripper: bool) -> None:
@@ -268,6 +285,8 @@ def main() -> int:
         "rtc_bench/openpi_rtc/safety.py",
     ]:
         file_snapshot(root / rel)
+
+    file_full(root / "examples/xtrainer_real/gripper/dobot_gripper.py")
 
     probe_robot(root, args.move_test, args.with_gripper)
 

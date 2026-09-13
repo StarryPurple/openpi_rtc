@@ -49,10 +49,11 @@ def test_staircase_schedule():
 
     m = staircase_matrix(4, H)
     assert m.shape == (5, H)
-    # d=0 -> no clean front/tail: the whole chunk is a 0->1 ramp (endpoints
-    # excluded, so all values lie strictly inside (0, 1) and increase).
+    # d=0 -> no clean front/tail: the whole chunk is the paper's ramp
+    # t_p = p/H (starts at 0, ends below 1, strictly increasing).
     m0 = np.asarray(m[0])
-    assert np.all(m0 > 0.0) and np.all(m0 < 1.0)
+    assert np.all(m0 >= 0.0) and np.all(m0 < 1.0)
+    assert m0[0] == 0.0
     assert np.all(np.diff(m0) > 0)
     print("staircase schedule OK")
 

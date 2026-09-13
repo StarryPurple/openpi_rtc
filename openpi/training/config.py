@@ -93,6 +93,17 @@ class DataConfig:
     # If true, will use the LeRobot dataset task to define the prompt.
     prompt_from_task: bool = False
 
+    # πR² slow channel: fetch this many past frames (ticks) for images/state so
+    # the data pipeline can simulate a stale vision/language prefix. 0 = off.
+    slow_channel_delay_max: int = 0
+    # Dataset keys fetched with negative delta timestamps for the slow channel.
+    slow_channel_keys: Sequence[str] = (
+        "observation.state",
+        "observation.images.cam_high",
+        "observation.images.cam_left_wrist",
+        "observation.images.cam_right_wrist",
+    )
+
     # Only used for RLDS data loader (ie currently only used for DROID).
     rlds_data_dir: str | None = None
     # Action space for DROID dataset.
@@ -267,6 +278,16 @@ class LeRobotAlohaDataConfig(DataConfigFactory):
     )
     # Action keys that will be used to read the action sequence from the dataset.
     action_sequence_keys: Sequence[str] = ("action",)
+    # πR² slow channel (see DataConfig). When > 0, the data pipeline simulates
+    # a stale vision/language prefix by sampling a per-sample image delay and
+    # selecting the corresponding past frames.
+    slow_channel_delay_max: int = 0
+    slow_channel_keys: Sequence[str] = (
+        "observation.state",
+        "observation.images.cam_high",
+        "observation.images.cam_left_wrist",
+        "observation.images.cam_right_wrist",
+    )
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
@@ -284,13 +305,55 @@ class LeRobotAlohaDataConfig(DataConfigFactory):
         model_transforms = ModelTransformFactory(
             default_prompt=self.default_prompt)(model_config)
 
-        return dataclasses.replace(
+        data_config = dataclasses.replace(
             self.create_base_config(assets_dirs, model_config),
             repack_transforms=self.repack_transforms,
             data_transforms=data_transforms,
             model_transforms=model_transforms,
             action_sequence_keys=self.action_sequence_keys,
+            slow_channel_delay_max=self.slow_channel_delay_max,
+            slow_channel_keys=self.slow_channel_keys,
         )
+        if self.slow_channel_delay_max > 0:
+            # Slow channel: select stale frames before AlohaInputs (which
+            # expects single-frame images) and tokenize the prefix from the
+            # stale state while keeping the current state for DeltaActions and
+            # the fast proprioception channel.
+            assert model_config.model_type == _model.ModelType.PI05, (
+                "πR² slow channel currently requires pi0.5"
+            )
+            from openpi.models import tokenizer as _tokenizer
+
+            slow_model_transforms = _transforms.Group(
+                inputs=[
+                    _transforms.InjectDefaultPrompt(self.default_prompt),
+                    _transforms.ResizeImages(224, 224),
+                    _transforms.NormalizeStateExtra(
+                        data_config.norm_stats,
+                        use_quantiles=data_config.use_quantile_norm,
+                        key="slow_state",
+                    ),
+                    _transforms.TokenizePrompt(
+                        _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                        discrete_state_input=model_config.discrete_state_input,
+                        state_key="slow_state",
+                    ),
+                    _transforms.PadStatesAndActions(model_config.action_dim),
+                ],
+                outputs=model_transforms.outputs,
+            )
+            data_config = dataclasses.replace(
+                data_config,
+                data_transforms=_transforms.Group(
+                    inputs=(
+                        _transforms.SimulateSlowChannel(self.slow_channel_delay_max),
+                        *data_config.data_transforms.inputs,
+                    ),
+                    outputs=data_config.data_transforms.outputs,
+                ),
+                model_transforms=slow_model_transforms,
+            )
+        return data_config
 
 
 @dataclasses.dataclass(frozen=True)

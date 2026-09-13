@@ -7,14 +7,14 @@ Install once:
     pip install -r requirements-obs.txt
     # or: uv pip install -r requirements-obs.txt
 
-Usage (ref 是 object key，可带 openpi05/ 前缀；默认桶 openpi-rtc，可用
+Usage (ref 是 object key，可带 openpi05/ 前缀；默认桶 handzero-research，可用
 --bucket 换桶；endpoint 默认北京四，可用 --endpoint 或 OBS_ENDPOINT 换):
-    python obs_transfer.py ls [prefix] [--bucket openpi-rtc] [--endpoint https://obs.cn-north-4.myhuaweicloud.com]
+    python obs_transfer.py ls [prefix] [--bucket handzero-research] [--endpoint https://obs.cn-north-4.myhuaweicloud.com]
     python obs_transfer.py upload <local_file> <ref> [--part-mb 64] [--workers 4] [--force]
     python obs_transfer.py download <ref> <local_file>
     python obs_transfer.py rm <ref> --yes
 
-Examples (defaults: bucket openpi-rtc, endpoint cn-north-4):
+Examples (defaults: bucket handzero-research, endpoint cn-north-4):
     # list everything under openpi05/
     python obs_transfer.py ls openpi05/
 
@@ -39,8 +39,8 @@ Notes:
     - Downloads >512MB use the SDK's resumable downloadFile.
     - Alternative on machines that prefer the Huawei obsutil CLI (single
       binary, already configured on the dev machine):
-        obsutil cp /tmp/inference_bundle.tar.gz obs://openpi-rtc/openpi05/inference_bundle.tar.gz -f
-        obsutil cp obs://openpi-rtc/openpi05/inference_bundle.tar.gz . -f
+        obsutil cp /tmp/inference_bundle.tar.gz obs://handzero-research/openpi05/inference_bundle.tar.gz -f
+        obsutil cp obs://handzero-research/openpi05/inference_bundle.tar.gz . -f
 """
 
 from __future__ import annotations

@@ -22,6 +22,7 @@ import datetime
 import os
 import pathlib
 import sys
+import time
 from argparse import Namespace
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parent
@@ -49,6 +50,12 @@ def parse_args():
     ap.add_argument("--num-steps", type=int, default=10,
                     help="denoising steps (try 1 after training for the "
                          "paper's fast mode; 10 is the safe default)")
+    ap.add_argument("--slow-channel", action=argparse.BooleanOptionalAction,
+                    default=False,
+                    help="异步慢通道 + 单步流评估（每次调用一步 DiT；"
+                         "与真机 --mode pir2 --slow-channel 对齐）")
+    ap.add_argument("--slow-refresh-every", type=int, default=5,
+                    help="慢通道前缀刷新间隔（tick）")
     ap.add_argument("--max-steps", type=int, default=None)
     ap.add_argument("--log-dir", default="eval_logs")
     return ap.parse_args()
@@ -72,7 +79,15 @@ def main() -> int:
     cfg = config.get_config(args.config)
     policy = policy_config.create_trained_policy(cfg, args.checkpoint)
     norm_stats = load_norm_stats(args.checkpoint, cfg)
-    policy = wrap_policy_for_pir2(policy, args.inference_delay, norm_stats=norm_stats)
+    policy = wrap_policy_for_pir2(
+        policy,
+        args.inference_delay,
+        norm_stats=norm_stats,
+        slow_channel=args.slow_channel,
+        image_delay_max=max(0, args.slow_refresh_every),
+        slow_refresh_every=args.slow_refresh_every,
+        num_steps=args.num_steps,
+    )
 
     files = []
     if os.path.isdir(args.dataset):
@@ -105,7 +120,11 @@ def main() -> int:
              "boundary_mse": [], "boundary_l1": [], "boundary_mse_list": [],
              "boundary_l1_list": [], "infer_ms": []}
     for f in tqdm.tqdm(files, desc="Evaluating files"):
-        stats = ev.evaluate_file(f, policy, eval_args)
+        stats = (
+            ev.evaluate_file(f, policy, eval_args)
+            if not args.slow_channel
+            else evaluate_file_stream(f, policy, eval_args)
+        )
         if not stats:
             continue
         total["mse"].append(stats["mse"])
@@ -152,6 +171,65 @@ def main() -> int:
             fh.write(f"{k}: {v}\n")
     print(f"Results written to {results_file}")
     return 0
+
+
+def evaluate_file_stream(file_path, policy, args):
+    """单步流离线评估：每 d 帧调用一次 ``infer_stream``（warm 首帧），
+    只把本次新发射的前 d 个动作与 GT 对比（对齐真机语义）。"""
+    import h5py
+
+    from openpi_rtc import eval_offline_rtc as _ev
+
+    mse_list, l1_list, infer_ms_list = [], [], []
+    d = int(args.inference_delay)
+    steps = 0
+    warm = True
+    try:
+        with h5py.File(file_path, "r", rdcc_nbytes=1024 ** 2 * 2) as root:
+            data_len = (
+                len(root["/observations/qpos"])
+                if "/observations/qpos" in root
+                else len(root["action"])
+            )
+            if args.max_steps:
+                data_len = min(data_len, args.max_steps)
+            for i in range(0, data_len, d):
+                try:
+                    observation = _ev.build_observation(root, i, args.prompt)
+                except KeyError as e:
+                    continue
+                t0 = time.perf_counter()
+                result = policy.infer_stream(
+                    observation, inference_delay=d, warm=warm
+                )
+                warm = False
+                infer_ms = (time.perf_counter() - t0) * 1000.0
+                if not result.get("refreshed"):
+                    infer_ms_list.append(infer_ms)  # 排除前缀刷新调用
+                pred = np.asarray(result["actions"], dtype=np.float32)
+                gt = np.asarray(root["action"][i : i + d], dtype=np.float32)
+                n = min(len(pred), len(gt), d)
+                if n <= 0:
+                    continue
+                pred_c, gt_c = pred[:n, : gt.shape[1]], gt[:n]
+                mse_list.append(float(np.mean((pred_c - gt_c) ** 2)))
+                l1_list.append(float(np.mean(np.abs(pred_c - gt_c))))
+                steps += 1
+    except Exception:
+        import traceback
+
+        traceback.print_exc()
+        return None
+    if not steps:
+        return None
+    return {
+        "mse": float(np.mean(mse_list)),
+        "l1": float(np.mean(l1_list)),
+        "steps": steps,
+        "mse_list": mse_list,
+        "l1_list": l1_list,
+        "mean_infer_ms": float(np.mean(infer_ms_list)),
+    }
 
 
 if __name__ == "__main__":

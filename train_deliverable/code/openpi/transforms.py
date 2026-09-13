@@ -102,6 +102,46 @@ class RepackTransform(DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
+class SimulateSlowChannel(DataTransformFn):
+    """πR² slow channel: sample a per-sample image delay and select stale frames.
+
+    Expects repacked data whose ``images`` (C,H,W per frame) and ``state``
+    carry a leading time dim from the data loader's negative delta timestamps
+    (last index == current frame). It samples ``k ~ Uniform[0, max_delay]``,
+    keeps the *stale* frames as the prefix observation (``images`` + the stale
+    state under ``slow_state``, used only for tokenizing the prefix) and keeps
+    ``state`` as the *current* frame (used by DeltaActions and the model's
+    fast proprioception channel). The sampled delay is stored under
+    ``slow_delay``.
+    """
+
+    max_delay: int
+
+    def __call__(self, data: DataDict) -> DataDict:
+        k = int(np.random.randint(0, self.max_delay + 1))
+        idx = -1 - k
+
+        images = {}
+        for name, img in data["images"].items():
+            img = np.asarray(img)
+            images[name] = img[idx] if img.ndim == 4 else img
+
+        state = np.asarray(data["state"])
+        if state.ndim > 1:
+            stale_state, current_state = state[idx], state[-1]
+        else:
+            stale_state = current_state = state
+
+        return {
+            **data,
+            "images": images,
+            "state": current_state,
+            "slow_state": stale_state,
+            "slow_delay": np.asarray(k, dtype=np.int32),
+        }
+
+
+@dataclasses.dataclass(frozen=True)
 class InjectDefaultPrompt(DataTransformFn):
     prompt: str | None
 
@@ -143,6 +183,32 @@ class Normalize(DataTransformFn):
         assert stats.q99 is not None
         q01, q99 = stats.q01[..., : x.shape[-1]], stats.q99[..., : x.shape[-1]]
         return (x - q01) / (q99 - q01 + 1e-6) * 2.0 - 1.0
+
+
+@dataclasses.dataclass(frozen=True)
+class NormalizeStateExtra(DataTransformFn):
+    """πR² slow channel: normalize an extra state-like key with the same stats
+    as ``state`` (e.g. the stale ``slow_state`` used to tokenize the prefix).
+    """
+
+    norm_stats: NormStats | None
+    use_quantiles: bool = False
+    key: str = "slow_state"
+
+    def __call__(self, data: DataDict) -> DataDict:
+        if self.key not in data or self.norm_stats is None or "state" not in self.norm_stats:
+            return data
+        x = np.asarray(data[self.key], dtype=np.float32)
+        stats = self.norm_stats["state"]
+        if self.use_quantiles:
+            assert stats.q01 is not None and stats.q99 is not None
+            q01, q99 = stats.q01[..., : x.shape[-1]], stats.q99[..., : x.shape[-1]]
+            x = (x - q01) / (q99 - q01 + 1e-6) * 2.0 - 1.0
+        else:
+            mean, std = stats.mean[..., : x.shape[-1]], stats.std[..., : x.shape[-1]]
+            x = (x - mean) / (std + 1e-6)
+        data[self.key] = x
+        return data
 
 
 @dataclasses.dataclass(frozen=True)
@@ -248,13 +314,16 @@ class AbsoluteActions(DataTransformFn):
 class TokenizePrompt(DataTransformFn):
     tokenizer: _tokenizer.PaligemmaTokenizer
     discrete_state_input: bool = False
+    # πR² slow channel: tokenize the *stale* state (if any) into the prompt so
+    # the prefix reflects the same observation age as the images.
+    state_key: str = "state"
 
     def __call__(self, data: DataDict) -> DataDict:
         if (prompt := data.pop("prompt", None)) is None:
             raise ValueError("Prompt is required")
 
         if self.discrete_state_input:
-            if (state := data.get("state", None)) is None:
+            if (state := data.get(self.state_key, None)) is None:
                 raise ValueError("State is required.")
         else:
             state = None

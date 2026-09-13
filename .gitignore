@@ -166,3 +166,10 @@ robot_pc_check_*.txt
 /yulong.tar.gz
 
 /bos_upload.py
+
+# 传输/记录产物（走 BOS/OBS，不进 git）
+/upload/
+/download/
+/record_csv.tar.gz
+/csv_rtcs.tar.gz
+/demo_history/

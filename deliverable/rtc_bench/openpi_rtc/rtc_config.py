@@ -40,10 +40,20 @@ class RTCConfig:
     # Re-anchor the previous raw chunk to the current observation state
     # (delta-action policies only; see class docstring).
     anchor_correction: bool = True
+    # Guidance correction Jacobian:
+    #   "identity" — lerobot 量产版：correction = err（直接作用于目标位置，
+    #     稳定；transformer 的完整 Jacobian 范数大，容易发散/失效）。
+    #   "full"     — Kinetix 论文原版：correction = J^T err（理论上更精确，
+    #     但实机观测到引导几乎不生效）。
+    guidance_jacobian: str = "identity"
     debug: bool = False
 
     def __post_init__(self) -> None:
         if self.max_guidance_weight <= 0:
             raise ValueError("max_guidance_weight must be positive")
+        if self.guidance_jacobian not in ("identity", "full"):
+            raise ValueError(
+                f"guidance_jacobian must be 'identity' or 'full', got {self.guidance_jacobian!r}"
+            )
         if isinstance(self.prefix_attention_schedule, str):
             self.prefix_attention_schedule = RTCAttentionSchedule(self.prefix_attention_schedule)
