@@ -91,6 +91,16 @@ python rtc_bench/test_dobot_rtc_bench.py --mode pir2 --slow-channel --episodes 5
     # πR² 慢通道 + 单步流（论文 fast mode）：前缀 KV 异步缓存，每
     # --slow-refresh-every(默认5) tick 刷新；每次调用只跑一步 DiT，
     # 释放 d 个干净动作；warmup 按一步 DiT 延迟重新测 d（<=8 训练预算）
+
+# 官方协议对照（pi-r2-flow/pi-r2-flow，2026-09-01 发布）：
+#   PI-R2 : --query-mode continuous --chunk-len 2 --nfe 24
+#           -> 本 bench: --slow-channel --chunk-len 2（d = slide_steps = chunk_len）
+#   RTC   : --query-mode pipelined --chunk-len 5 --nfe 4 --inpaint --force-nonstreaming
+#           -> 本 bench: --mode train_rtc（硬冻结前缀 + 非流式完整去噪）
+#   plain : --chunk-len 10 --nfe 4（sync）或 continuous + --ensemble（ACT 式时间集成）
+#           -> 本 bench: --mode pir2 [--ensemble --chunk-len 10]
+python rtc_bench/test_dobot_rtc_bench.py --mode pir2 --slow-channel --chunk-len 2 --episodes 5
+python rtc_bench/test_dobot_rtc_bench.py --mode pir2 --ensemble --chunk-len 10 --episodes 5
 ```
 
 常用参数：`--episodes`、`--inference-delay`（固定 d，默认自动）、`--execution-horizon`、

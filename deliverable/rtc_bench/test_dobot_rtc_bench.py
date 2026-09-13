@@ -186,6 +186,28 @@ def send_gripper(env, action, arms: str) -> None:
         env._robot_l.command_joint_state_gripper(action[:7])   # 未用夹爪
 
 
+def ensemble_action(buf, t_now: float, period: float, m: float):
+    """ACT 式时间集成（新块优先），对齐官方 control_utils.ensemble_action。
+
+    buf: [(chunk (T, D), t_obs), ...]。对每个 chunk，idx =
+    round((t_now - t_obs) / period) 既是"该 chunk 对当前时刻的预测位置"、
+    也是"该 chunk 的年龄"；权重 = exp(-m * idx)（最新块权重 1，越旧越小）。
+    返回当前时刻的加权平均动作 (D,)；无覆盖则为 None。
+    """
+    preds, weights = [], []
+    for chunk, t_obs in buf:
+        idx = int(round((t_now - t_obs) / period))
+        if 0 <= idx < len(chunk):
+            preds.append(chunk[idx])
+            weights.append(np.exp(-m * idx))
+    if not preds:
+        return None
+    p = np.stack(preds, axis=0).astype(np.float32)
+    w = np.asarray(weights, dtype=np.float32)
+    w /= w.sum()
+    return (w[:, None] * p).sum(axis=0).astype(np.float32)
+
+
 # 模式 -> 模型映射（微调产物暂时占位；也可用 --checkpoint 覆盖）
 MODELS: dict[str, dict] = {
     "baseline": {
@@ -293,6 +315,16 @@ def parse_args() -> argparse.Namespace:
                          "（论文 fast mode；仅 --mode pir2 生效）")
     ap.add_argument("--slow-refresh-every", type=int, default=5,
                     help="πR² 慢通道前缀每隔多少 tick 刷新一次（0..image_delay_max 之间的真实年龄）")
+    ap.add_argument("--chunk-len", type=int, default=None,
+                    help="每个 chunk 执行多少拍后重新查询（对齐官方 --chunk-len）："
+                         "None=按模式默认（pir2 stream 用实测 d，其余执行整块）")
+    ap.add_argument("--ensemble", action="store_true",
+                    help="ACT 式时间集成（官方 plain_flow continuous 模式）："
+                         "对新旧 chunk 按 exp(-m*age) 加权平均，新块优先")
+    ap.add_argument("--ensemble-m", type=float, default=0.01,
+                    help="时间集成的衰减率（官方默认 0.01）")
+    ap.add_argument("--ensemble-buffer-size", type=int, default=30,
+                    help="时间集成保留的 chunk 数（官方默认 30）")
     ap.add_argument("--arms", default="right", choices=["left", "right", "both"])
     ap.add_argument("--robot-type", default="Nova 2", choices=["Nova 2", "Nova 5"])
     ap.add_argument("--episode-timeout-s", type=float, default=30.0)
@@ -459,6 +491,7 @@ class BenchRunner:
         # 使 merge 恰好落在“在飞窗口”被消费完的时刻（避免重复执行/跳变）。
         self._stream_drain_ticks = None
         self._stream_latency = []
+        self._last_stream_query = 0.0
         self.queue = ActionQueue(RTCConfig(enabled=self.rtc_enabled))
         self._latency_ms = collections.deque(maxlen=20)
         self._stop = threading.Event()
@@ -469,6 +502,11 @@ class BenchRunner:
         self._inference_delay = None
         self.debug = args.debug_timing
         self.safety = SafetyConfig(enabled=not args.safety_off, robot_type=args.robot_type)
+        # 官方 plain_flow continuous 模式：ACT 式时间集成缓冲
+        self.ensemble = bool(getattr(args, "ensemble", False))
+        self._ens_buf: collections.deque = collections.deque(
+            maxlen=max(1, int(getattr(args, "ensemble_buffer_size", 30)))
+        )
 
     def _delay_ticks(self) -> int:
         # d 在 warmup 时固定，运行期间不变（inference_delay 是 jit static 参数，
@@ -483,14 +521,20 @@ class BenchRunner:
                 # 单步流：每调用只产出 d 个新动作，追加进队列（不是整块
                 # 替换）；队列剩到 d 拍时触发下一次推理。d 必须 >= 2，
                 # 否则产出速率 < 执行速率（25 拍/s），队列会饿死。
-                d = self._delay_ticks()
+                # 官方协议：--chunk-len 即 slide_steps(d)；continuous 模式按
+                # d*period 节流（每个 d 拍查询一次），并保持队列高水位闸门。
+                d = int(self.args.chunk_len) if self.args.chunk_len else self._delay_ticks()
                 H = self.policy._model.action_horizon
                 d = max(2, min(d, H // 3))  # 与 wrapper/staircase 的 clamp 一致
                 drain = self._stream_drain_ticks
                 if drain is None:
                     drain = 1
                 trigger = max(1, d)
-                if self.queue.qsize() > trigger:
+                now = time.perf_counter()
+                if (
+                    self.queue.qsize() > trigger
+                    or now - self._last_stream_query < d * PERIOD
+                ):
                     time.sleep(PERIOD / 4)
                     continue
                 obs = self._latest_obs if self._latest_obs is not None else get_observation(self.env)
@@ -501,6 +545,7 @@ class BenchRunner:
                     warm=not self._stream_ready,
                 )
                 self._stream_ready = True
+                self._last_stream_query = time.perf_counter()
                 infer_ms = (time.perf_counter() - t0) * 1000.0
                 self._latency_ms.append(infer_ms)
                 actions = np.asarray(out["actions"], dtype=np.float32)
@@ -658,7 +703,15 @@ class BenchRunner:
                     actions = actions.copy()
                     actions[: K + 1] = bridge
             # rtc: 从新块第 0 位执行（不再跳 d），边界由引导+过渡衔接
-            self.queue.merge(raw, actions, 0)
+            if self.ensemble:
+                # 官方 plain_flow continuous：不入队，存进时间集成缓冲；
+                # 主循环按"当前时刻"对所有在窗 chunk 做新块优先加权平均。
+                _chunk14 = np.asarray(actions, dtype=np.float32)
+                if _chunk14.ndim == 2 and _chunk14.shape[-1] > 14:
+                    _chunk14 = _chunk14[:, :14]
+                self._ens_buf.append((_chunk14, t0))
+            else:
+                self.queue.merge(raw, actions, 0)
             clamped = 0
             if self.debug:
                 self._infer_w.writerow([
@@ -677,6 +730,9 @@ class BenchRunner:
                 # （与平台 harness 的“推理一次→执行完→再推理”一致）
                 while self.queue.qsize() > 0 and not self._stop.is_set():
                     time.sleep(PERIOD / 4)
+            if self.ensemble:
+                # 集成模式连续查询：按 chunk_len 节流，保持缓冲新鲜
+                time.sleep(max(1, int(self.args.chunk_len or 2)) * PERIOD)
 
     def _observe_loop(self, stop_ev: threading.Event) -> None:
         """独立观测线程：读相机+qpos，更新最新观测（executor 不再读相机）。"""
@@ -884,7 +940,13 @@ class BenchRunner:
             ):
                 t0 = time.perf_counter()
                 queue_size_before = self.queue.qsize()
-                action = self.queue.get()
+                if self.ensemble:
+                    # 官方 plain_flow continuous：对在窗 chunk 做新块优先加权平均
+                    action = ensemble_action(
+                        self._ens_buf, time.perf_counter(), PERIOD, self.args.ensemble_m
+                    )
+                else:
+                    action = self.queue.get()
                 if action is not None:
                     # 统一裁到 14 维（12 关节 + 2 夹爪，左臂在前）：模型输出
                     # 可能带 32 维 padding（慢通道流路径），后续安全检查、
